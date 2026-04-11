@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pte-app",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["/tmp/pte/server.py"],
+      "port": 3000
+    }
+  ]
+}
