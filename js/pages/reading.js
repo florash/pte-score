@@ -5,6 +5,7 @@ Pages['rw-fill-blanks'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'rwFillBlanks', questionText: q.parts.join(' ___ ') });
     let html=`
 <div class="page-header">
   <h1>R&W Fill in the Blanks <span class="badge badge-reading">Reading</span></h1>
@@ -64,6 +65,7 @@ Pages['mc-single-reading'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'mcSingleReading', questionText: `${q.passage} ${q.question}` });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>MC Single Answer <span class="badge badge-reading">Reading</span></h1>
@@ -105,6 +107,7 @@ Pages['mc-multiple-reading'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'mcMultipleReading', questionText: `${q.passage} ${q.question}` });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>MC Multiple Answer <span class="badge badge-reading">Reading</span></h1>
@@ -157,6 +160,7 @@ Pages['reorder-paragraphs'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'reorderParagraphs', questionText: q.sentences.map(s => s.text).join(' ') });
     const shuffled=shuffle([...q.sentences]);
     $('#page-container').innerHTML=`
 <div class="page-header">
@@ -243,6 +247,7 @@ Pages['r-fill-blanks'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'rFillBlanks', questionText: q.fullText });
     let text=q.fullText;
     q.blanks.forEach(b=>{ text=text.replace(b.word,`<input class="blank-input" data-word="${b.word}" placeholder="${b.hint.split(',')[0]}..." style="min-width:${b.word.length*10}px">`); });
     $('#page-container').innerHTML=`

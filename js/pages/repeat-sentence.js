@@ -73,6 +73,7 @@ Pages['repeat-sentence'] = function() {
 
   function render() {
     const q = questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'repeatSentence', questionText: q.text });
     $('#page-container').innerHTML = `
 <div class="page-header">
   <h1>Repeat Sentence <span class="badge badge-speaking">Speaking</span></h1>
@@ -231,8 +232,8 @@ Pages['repeat-sentence'] = function() {
     const q = questions[qIndex];
     $('#hidden-text').style.display = 'block';
     const score = !failedStartWindow && finalText ? Scorer.repeatSentence(finalText, q.text) : null;
-    if (failedStartWindow) Stats.record('repeatSentence', 10, 90);
-    else if (score) Stats.record('repeatSentence', score.pte, 90);
+    if (failedStartWindow) Stats.record('repeatSentence', 10, 90, { transcript: finalText || '', ai_feedback: 'You must start speaking within 5 seconds after recording begins.' });
+    else if (score) Stats.record('repeatSentence', score.pte, 90, { transcript: finalText || '', ai_feedback: Scorer.getSpeakingInsights(score, finalText || '', q.text).suggestion });
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget done result-state">
   <div class="recorder-result-main">

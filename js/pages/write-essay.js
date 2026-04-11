@@ -4,6 +4,7 @@ Pages['write-essay'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'writeEssay', questionText: q.prompt });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>Write Essay <span class="badge badge-writing">Writing</span></h1>
@@ -42,7 +43,7 @@ Pages['write-essay'] = function() {
     timerObj&&timerObj.stop();
     const q=questions[qIndex]; const text=$('#answer').value;
     const result=Scorer.writeEssay(text,q.prompt,q.wordRange);
-    Stats.record('writeEssay',result.pte,90);
+    Stats.record('writeEssay',result.pte,90,{ transcript: text || '' });
     const sentences=text.split(/[.!?]+/).filter(s=>s.trim()).length;
     const paragraphs=text.split(/\n\n+/).filter(p=>p.trim()).length;
     $('#feedback-area').innerHTML=`

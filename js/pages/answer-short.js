@@ -70,6 +70,7 @@ Pages['answer-short'] = function() {
 
   function render() {
     const q = questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'answerShort', questionText: q.question });
     $('#page-container').innerHTML = `
 <div class="page-header">
   <h1>Answer Short Question <span class="badge badge-speaking">Speaking</span></h1>
@@ -233,7 +234,7 @@ Pages['answer-short'] = function() {
   </div>
 </div>`;
     if (failedStartWindow) {
-      Stats.record('answerShort', 10, 90);
+      Stats.record('answerShort', 10, 90, { transcript: finalText || '', ai_feedback: 'You must start speaking within 5 seconds after recording begins.' });
       $('#result-area').innerHTML = `
 <div class="card" style="margin-top:12px">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
@@ -250,7 +251,7 @@ Pages['answer-short'] = function() {
     const correct = responseNorm === answerNorm || responseNorm.split(' ').includes(answerNorm);
     const icon = correct ? '✅' : '❌';
     const color = correct ? 'var(--success)' : 'var(--danger)';
-    Stats.record('answerShort', correct ? 90 : 10, 90);
+    Stats.record('answerShort', correct ? 90 : 10, 90, { transcript: finalText || '', ai_feedback: correct ? 'Correct short answer.' : `Expected answer: ${q.answer}` });
     $('#result-area').innerHTML = `
 <div class="card" style="margin-top:12px">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">

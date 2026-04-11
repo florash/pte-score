@@ -4,6 +4,7 @@ Pages['summarize-written'] = function() {
 
   function render(){
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'summarizeWritten', questionText: q.text });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>Summarize Written Text <span class="badge badge-writing">Writing</span></h1>
@@ -43,7 +44,7 @@ Pages['summarize-written'] = function() {
     const q=questions[qIndex];
     const text=$('#answer').value;
     const result=Scorer.summarizeWritten(text,q.text,q.wordRange);
-    Stats.record('summarizeWritten',result.pte,90);
+    Stats.record('summarizeWritten',result.pte,90,{ transcript: text || '' });
     // Count sentences
     const sentences=text.split(/[.!?]+/).filter(s=>s.trim()).length;
     const oneSentence=sentences===1;

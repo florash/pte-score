@@ -152,6 +152,12 @@ function navigate(page) {
   document.getElementById('main').scrollTop = 0;
 }
 
+function refreshCurrentPage() {
+  const currentPage = sessionStorage.getItem('pte_page') || 'home';
+  const fn = Pages[currentPage];
+  if (fn) fn();
+}
+
 function toggleDrawer() {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('drawer-overlay');
@@ -183,9 +189,9 @@ function setAppLang(lang) {
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────
-const THEMES = ['light','pte-official','dark','ocean','forest','lavender','pink','black-pink'];
-const THEME_ICONS = { light:'🎓', 'pte-official':'🌙', dark:'🌊', ocean:'🌿', forest:'💜', lavender:'🌸', pink:'🖤', 'black-pink':'☀️' };
-const THEME_LABELS = { light:'PTE官方', 'pte-official':'暗色', dark:'海洋', ocean:'森林', forest:'薰衣草', lavender:'淡粉', pink:'黑粉', 'black-pink':'默认' };
+const THEMES = ['light','pte-official','dark','ocean','forest','lavender','pink','black-pink','grey'];
+const THEME_ICONS = { light:'🎓', 'pte-official':'🌙', dark:'🌊', ocean:'🌿', forest:'💜', lavender:'🌸', pink:'🖤', 'black-pink':'⬜', grey:'☀️' };
+const THEME_LABELS = { light:'PTE官方', 'pte-official':'暗色', dark:'海洋', ocean:'森林', forest:'薰衣草', lavender:'淡粉 →', pink:'粉黑 →', 'black-pink':'灰白 →', grey:'默认 →' };
 
 function applyTheme(theme) {
   document.body.classList.remove(...THEMES);
@@ -204,7 +210,7 @@ function toggleTheme() {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   if(window.MicAccess) MicAccess.syncPermissionState();
 
   // Apply saved theme
@@ -218,6 +224,13 @@ document.addEventListener('DOMContentLoaded', () => {
   $$('.nav-item').forEach(el => {
     el.addEventListener('click', () => navigate(el.dataset.page));
   });
+
+  if (window.AuthUI) {
+    AuthUI.ensureModal();
+    AuthUI.renderTriggers();
+  }
+  if (window.AppAuth) await AppAuth.init();
+  if (window.AuthUI) AuthUI.renderTriggers();
 
   // Restore last page or default to home
   const saved = sessionStorage.getItem('pte_page') || 'home';

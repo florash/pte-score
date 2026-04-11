@@ -72,6 +72,7 @@ Pages['retell-lecture'] = function() {
 
   function render() {
     const q = questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'retellLecture', questionText: q.transcript });
     $('#page-container').innerHTML = `
 <div class="page-header">
   <h1>Re-tell Lecture <span class="badge badge-speaking">Speaking</span></h1>
@@ -246,8 +247,8 @@ Pages['retell-lecture'] = function() {
     <button class="btn btn-secondary" onclick="RL_reset()">Done</button>
   </div>
 </div>`;
-    if (failedStartWindow) Stats.record('retellLecture', 10, 90);
-    else if (score) Stats.record('retellLecture', score.pte, 90);
+    if (failedStartWindow) Stats.record('retellLecture', 10, 90, { transcript: finalText || '', ai_feedback: 'You must start speaking within 5 seconds after recording begins.' });
+    else if (score) Stats.record('retellLecture', score.pte, 90, { transcript: finalText || '', ai_feedback: Scorer.getSpeakingInsights(score, finalText || '', q.transcript).suggestion });
     $('#score-area').innerHTML = failedStartWindow ? `<div style="background:#fff8ed;border:1px solid #f59e0b;border-radius:8px;padding:14px;font-size:13.5px;color:#92400e"><strong>Score: 10/90</strong><br>⚠️ You must start speaking within 5 seconds after recording begins, otherwise this item is marked as fail.</div>` : finalText ? `
 ${Scorer.renderSpeakingResult({
   questionTitle: q.title,

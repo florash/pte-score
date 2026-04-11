@@ -2,6 +2,8 @@ Pages.home = function() {
   const stats = Stats.get();
   const lang = window.getAppLang ? getAppLang() : 'zh';
   const isEn = lang === 'en';
+  const isLoggedIn = !!(window.AppAuth && AppAuth.isLoggedIn());
+  const userEmail = AppAuth?.user?.email || '';
   const micState = window.MicAccess ? MicAccess.permissionState : 'prompt';
   const micLabel = window.MicAccess ? MicAccess.getStatusLabel() : 'Unknown';
   const copy = {
@@ -40,6 +42,16 @@ Pages.home = function() {
     micNeeded: isEn ? 'Enable microphone once when you enter the app so speaking practice can start without extra prompts.' : '进入应用后先授权一次麦克风，这样口语练习时会少很多弹窗。',
     micButton: isEn ? 'Enable Microphone' : '预授权麦克风',
     micStatus: isEn ? 'Status' : '当前状态',
+    welcomeBack: isEn ? 'Welcome back' : '欢迎回来',
+    saveProgress: isEn ? 'Sign up to save your progress across devices.' : '注册或登录后可以保存你的练习进度。',
+    loginCta: isEn ? 'Log in' : '登录',
+    signupCta: isEn ? 'Create account' : '注册账号',
+    totalCompleted: isEn ? 'Total completed' : '累计完成',
+    avgScore: isEn ? 'Average score' : '平均分',
+    lastType: isEn ? 'Last practiced' : '最近练习',
+    syncLoading: isEn ? 'Loading your cloud progress…' : '正在加载你的云端进度…',
+    noCloudAttempts: isEn ? 'No saved attempts yet. Start a practice set to build your stats.' : '还没有云端练习记录，完成几道题后这里会自动更新。',
+    justNow: isEn ? 'just now' : '刚刚',
   };
   const moduleMeta = {
     readAloud: { icon:'📖', title:'Read Aloud', desc:'Read text aloud clearly and fluently', page:'read-aloud', badge:'speaking', count: DB.readAloud.length, focus:'Pronunciation and pacing' },
@@ -174,44 +186,42 @@ Pages.home = function() {
     <h1>PTE Academic</h1>
     <p>${copy.appSubtitle}</p>
   </div>
-  <div class="lang-toggle" role="tablist" aria-label="Language switcher">
-    <button class="lang-btn ${!isEn ? 'active' : ''}" onclick="setAppLang('zh')" aria-selected="${!isEn}">${copy.langZh}</button>
-    <button class="lang-btn ${isEn ? 'active' : ''}" onclick="setAppLang('en')" aria-selected="${isEn}">${copy.langEn}</button>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div class="lang-toggle" role="tablist" aria-label="Language switcher">
+      <button class="lang-btn ${!isEn ? 'active' : ''}" onclick="setAppLang('zh')" aria-selected="${!isEn}">${copy.langZh}</button>
+      <button class="lang-btn ${isEn ? 'active' : ''}" onclick="setAppLang('en')" aria-selected="${isEn}">${copy.langEn}</button>
+    </div>
+    <button id="theme-inline-btn" onclick="toggleTheme()" title="${isEn ? 'Switch theme' : '切换主题'}" style="background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 10px;cursor:pointer;font-size:15px;line-height:1;color:var(--text-light)">🎨</button>
   </div>
 </div>
 
-<section class="dashboard-section">
-  <div class="insight-card compact-card">
-    <div class="eyebrow">${copy.micTitle}</div>
-    <div class="insight-title">${copy.micStatus}: ${micLabel}</div>
-    <div class="insight-sub">${micState === 'granted' ? copy.micReady : copy.micNeeded}</div>
-    ${micState === 'granted' ? '' : `<div style="margin-top:14px"><button class="btn btn-primary" onclick="requestMicPreauth('home')">${copy.micButton}</button></div>`}
-  </div>
-</section>
 
 <section class="dashboard-section hero-grid">
   <div class="continue-card hero-main">
     <div class="eyebrow">${copy.continueEyebrow}</div>
-    <div class="continue-title">${copy.continueTitle} ${continueMeta.title}</div>
-    <div class="continue-meta">${copy.lastScore}: <strong>${latest ? latest.score : '--'}</strong> <span>•</span> ${latest ? `${copy.lastPracticed}: ${formatRelative(latest.date)}` : copy.startFirst}</div>
+    <div class="continue-title" id="home-continue-title">${isLoggedIn ? `${copy.welcomeBack}${userEmail ? `, ${userEmail}` : ''}` : `${copy.continueTitle} ${continueMeta.title}`}</div>
+    <div class="continue-meta" id="home-continue-meta">${isLoggedIn ? copy.syncLoading : `${copy.lastScore}: <strong>${latest ? latest.score : '--'}</strong> <span>•</span> ${latest ? `${copy.lastPracticed}: ${formatRelative(latest.date)}` : copy.startFirst}`}</div>
     <div class="continue-actions">
-      <button class="btn btn-primary" onclick="navigate('${continueMeta.page}')">${copy.continueCta}</button>
+      <button class="btn btn-primary" id="home-primary-cta" onclick="${isLoggedIn ? `navigate('${continueMeta.page}')` : `AuthUI.open('login')`}">${isLoggedIn ? copy.continueCta : copy.loginCta}</button>
+      ${isLoggedIn
+        ? `<button class="btn btn-outline" onclick="AppAuth.handleLogout()" style="opacity:0.7">${isEn ? 'Log out' : '退出登录'}</button>`
+        : `<button class="btn btn-outline" onclick="AuthUI.open('signup')">${copy.signupCta}</button>`}
     </div>
   </div>
   <div class="hero-side">
     <div class="insight-card compact-card">
       <div class="eyebrow">${copy.todayGoal}</div>
-      <div class="insight-title">${completedMins} / ${targetMins} mins</div>
+      <div class="insight-title" id="home-total-completed">${isLoggedIn ? '--' : `${completedMins} / ${targetMins} mins`}</div>
       <div class="goal-progress"><div class="goal-progress-fill" style="width:${goalPct}%"></div></div>
       <div class="insight-footer">
-        <span>${copy.completed} ${goalPct}%</span>
-        <button class="btn btn-outline" onclick="navigate('${continueMeta.page}')">${copy.resume}</button>
+        <span id="home-total-completed-label">${isLoggedIn ? copy.totalCompleted : `${copy.completed} ${goalPct}%`}</span>
+        <button class="btn btn-outline" id="home-secondary-cta" onclick="${isLoggedIn ? `navigate('${continueMeta.page}')` : `AuthUI.open('signup')`}">${isLoggedIn ? copy.resume : copy.signupCta}</button>
       </div>
     </div>
     <div class="insight-card compact-card">
-      <div class="eyebrow">${copy.weakArea}</div>
-      <div class="insight-title">${weakest ? moduleMeta[weakest.key].title : copy.notEnoughData}</div>
-      <div class="insight-sub">${weakest ? `${moduleMeta[weakest.key].focus} · ${copy.focusNext}` : copy.unlockInsight}</div>
+      <div class="eyebrow" id="home-insight-eyebrow">${isLoggedIn ? copy.avgScore : copy.weakArea}</div>
+      <div class="insight-title" id="home-insight-title">${isLoggedIn ? '--' : weakest ? moduleMeta[weakest.key].title : copy.notEnoughData}</div>
+      <div class="insight-sub" id="home-insight-sub">${isLoggedIn ? copy.syncLoading : weakest ? `${moduleMeta[weakest.key].focus} · ${copy.focusNext}` : copy.unlockInsight}</div>
     </div>
   </div>
 </section>
@@ -248,4 +258,57 @@ Pages.home = function() {
     ${cards}
   </div>
 </section>`;
+
+  if (isLoggedIn && window.PracticeTracker) {
+    (async () => {
+      try {
+        const summary = await PracticeTracker.fetchSummaryStats();
+        const mostRecent = summary.mostRecent;
+        const recentMeta = mostRecent ? moduleMeta[mostRecent.question_type] : null;
+        const lastWhen = mostRecent ? formatRelative(mostRecent.completed_at) : copy.justNow;
+        const counts = Object.values(summary.countsByType || {}).reduce((sum, count) => sum + count, 0);
+
+        const titleEl = $('#home-continue-title');
+        const metaEl = $('#home-continue-meta');
+        const primaryEl = $('#home-primary-cta');
+        const totalEl = $('#home-total-completed');
+        const totalLabelEl = $('#home-total-completed-label');
+        const insightEyebrowEl = $('#home-insight-eyebrow');
+        const insightTitleEl = $('#home-insight-title');
+        const insightSubEl = $('#home-insight-sub');
+        const secondaryEl = $('#home-secondary-cta');
+
+        if (titleEl) titleEl.textContent = `${copy.welcomeBack}${userEmail ? `, ${userEmail}` : ''}`;
+        if (metaEl) {
+          metaEl.innerHTML = mostRecent
+            ? `${copy.lastType}: <strong>${recentMeta ? recentMeta.title : mostRecent.question_type}</strong> <span>•</span> ${copy.lastPracticed}: ${lastWhen}`
+            : copy.noCloudAttempts;
+        }
+        if (primaryEl && recentMeta) {
+          primaryEl.textContent = copy.continueCta;
+          primaryEl.setAttribute('onclick', `navigate('${recentMeta.page}')`);
+        }
+        if (totalEl) totalEl.textContent = `${summary.totalCompleted}`;
+        if (totalLabelEl) totalLabelEl.textContent = copy.totalCompleted;
+        if (secondaryEl && recentMeta) {
+          secondaryEl.textContent = copy.resume;
+          secondaryEl.setAttribute('onclick', `navigate('${recentMeta.page}')`);
+        }
+        if (insightEyebrowEl) insightEyebrowEl.textContent = copy.avgScore;
+        if (insightTitleEl) insightTitleEl.textContent = summary.averageScore != null ? `${summary.averageScore}` : '--';
+        if (insightSubEl) {
+          insightSubEl.textContent = mostRecent
+            ? `${copy.lastType}: ${recentMeta ? recentMeta.title : mostRecent.question_type} · ${counts} ${copy.items}`
+            : copy.noCloudAttempts;
+        }
+      } catch (error) {
+        const metaEl = $('#home-continue-meta');
+        const insightTitleEl = $('#home-insight-title');
+        const insightSubEl = $('#home-insight-sub');
+        if (metaEl) metaEl.textContent = error.message || copy.noCloudAttempts;
+        if (insightTitleEl) insightTitleEl.textContent = '--';
+        if (insightSubEl) insightSubEl.textContent = copy.noCloudAttempts;
+      }
+    })();
+  }
 };

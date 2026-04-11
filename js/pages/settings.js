@@ -3,6 +3,8 @@ Pages['settings'] = function () {
   const masked = saved ? saved.slice(0, 8) + '••••••••••••••••••••' : '';
   const micLabel = window.MicAccess ? MicAccess.getStatusLabel() : 'Unknown';
   const micState = window.MicAccess ? MicAccess.permissionState : 'prompt';
+  const isLoggedIn = !!(window.AppAuth && AppAuth.isLoggedIn());
+  const userEmail = AppAuth?.user?.email || '';
 
   $('#page-container').innerHTML = `
 <div class="page-header">
@@ -20,6 +22,18 @@ Pages['settings'] = function () {
   <div style="display:flex;gap:10px;align-items:center">
     <button class="btn btn-primary" onclick="requestMicPreauth('settings')" ${micState === 'granted' ? 'disabled' : ''}>Enable Microphone</button>
     ${micState === 'granted' ? '<span style="font-size:12.5px;color:var(--success)">✓ Microphone already enabled</span>' : ''}
+  </div>
+</div>
+
+<div class="card" style="max-width:600px;margin-bottom:16px">
+  <div class="eyebrow">Supabase Write Test</div>
+  <div class="card-title" style="margin-bottom:6px">Temporary insert test</div>
+  <p style="font-size:13.5px;color:var(--text-light);line-height:1.7;margin-bottom:14px">
+    ${isLoggedIn ? `Logged in as <strong>${userEmail}</strong>.` : 'Log in first to test inserting one row into practice_attempts.'}
+  </p>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <button class="btn btn-primary" onclick="saveSupabaseTestAttempt()" ${isLoggedIn ? '' : 'disabled'}>Save Test Attempt</button>
+    <div id="supabase-test-status" style="font-size:12.5px;color:var(--text-light)"></div>
   </div>
 </div>
 
@@ -88,5 +102,20 @@ Pages['settings'] = function () {
   window.removeGeminiKey = function () {
     localStorage.removeItem('pte_gemini_key');
     Pages['settings']();
+  };
+
+  window.saveSupabaseTestAttempt = async function () {
+    const status = document.getElementById('supabase-test-status');
+    if (!status) return;
+    status.style.color = 'var(--text-light)';
+    status.textContent = 'Saving...';
+    try {
+      await PracticeTracker.saveTestAttempt();
+      status.style.color = 'var(--success)';
+      status.textContent = '✓ Test attempt saved successfully.';
+    } catch (error) {
+      status.style.color = 'var(--danger)';
+      status.textContent = error.message || 'Insert failed.';
+    }
   };
 };

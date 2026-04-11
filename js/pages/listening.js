@@ -14,6 +14,8 @@ Pages['summarize-spoken'] = function() {
   function render(){
     stopPlayback();
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'highlightSummary', questionText: q.transcript });
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'summarizeSpoken', questionText: q.transcript });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>Summarize Spoken Text <span class="badge badge-listening">Listening</span></h1>
@@ -72,7 +74,7 @@ Pages['summarize-spoken'] = function() {
     timerObj&&timerObj.stop();
     const q=questions[qIndex]; const text=$('#answer').value;
     const result=Scorer.summarizeSpoken(text,q.transcript,q.wordRange);
-    Stats.record('summarizeSpoken',result.pte,90);
+    Stats.record('summarizeSpoken',result.pte,90,{ transcript: text || '' });
     $('#feedback-area').innerHTML=`
 ${Scorer.renderPanel(result)}
 ${auto?'<div style="color:var(--warning);font-size:13px;margin:6px 0 0 2px">⏱️ Auto-submitted when time ran out.</div>':''}
@@ -100,6 +102,8 @@ Pages['mc-single-listening'] = function() {
   function render(){
     stopPlayback();
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'selectMissing', questionText: q.transcript });
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'mcSingleListening', questionText: `${q.transcript} ${q.question}` });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>MC Single Answer <span class="badge badge-listening">Listening</span></h1>
@@ -148,6 +152,8 @@ Pages['mc-multiple-listening'] = function() {
   function render(){
     stopPlayback();
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'highlightIncorrect', questionText: q.transcript });
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'mcMultipleListening', questionText: `${q.transcript} ${q.question}` });
     $('#page-container').innerHTML=`
 <div class="page-header">
   <h1>MC Multiple Answer <span class="badge badge-listening">Listening</span></h1>
@@ -193,6 +199,8 @@ Pages['fill-blanks-listening'] = function() {
   function render(){
     stopPlayback();
     const q=questions[qIndex];
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'writeDictation', questionText: q.sentence });
+    if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'fillBlanksListening', questionText: q.transcript });
     let blankHtml='';
     q.blanks.forEach((b,i)=>{ blankHtml+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:14px"><span>${b.before}</span> <input class="blank-input" id="fb${i}" data-key="${b.key}" style="min-width:${b.key.length*10+20}px" placeholder="..."> <span>${b.after}</span></div>`; });
     $('#page-container').innerHTML=`
@@ -414,7 +422,7 @@ Pages['write-dictation'] = function() {
   window.WFD_submit=function(){
     const q=questions[qIndex]; const text=$('#answer').value;
     const score=Scorer.writeDictation(text,q.sentence);
-    Stats.record('writeDictation',score.pte,90);
+    Stats.record('writeDictation',score.pte,90,{ transcript: text || '' });
     const diff=Scorer.diffWords(text,q.sentence);
     $('#feedback-area').innerHTML=`
 <div class="score-panel" style="margin-top:16px"><div class="score-big">${score.pte}</div><div class="score-label">PTE Score (10–90) — ${score.correct}/${score.total} words correct</div></div>

@@ -52,6 +52,11 @@ const MicAccess = {
   },
 
   async ensure() {
+    // 检查已有 stream 是否仍然活跃（跨页面导航后 tracks 可能变成 ended）
+    if (this.stream) {
+      const alive = this.stream.getTracks().some(t => t.readyState === 'live');
+      if (!alive) { this.stream = null; } // 清除失效 stream，重新申请
+    }
     if(this.stream) return this.stream;
     if(this.pending) return this.pending;
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
@@ -60,6 +65,10 @@ const MicAccess = {
       .then(stream => {
         this.stream = stream;
         this.permissionState = 'granted';
+        // 监听 stream 失效，自动清除
+        stream.getTracks().forEach(t => {
+          t.onended = () => { if(this.stream === stream) this.stream = null; };
+        });
         return stream;
       })
       .catch(err => {
@@ -119,7 +128,7 @@ const Stats = {
     try { return JSON.parse(localStorage.getItem(this._key)||'{}'); } catch(e){return {};}
   },
   save(data) { localStorage.setItem(this._key, JSON.stringify(data)); },
-  record(type, score, total) {
+  record(type, score, total, meta={}) {
     const d=this.get();
     if(!d[type]) d[type]={attempts:0,totalScore:0,history:[]};
     d[type].attempts++;
@@ -127,6 +136,11 @@ const Stats = {
     d[type].history.push({score,total,date:new Date().toISOString()});
     if(d[type].history.length>30) d[type].history=d[type].history.slice(-30);
     this.save(d);
+    if (window.PracticeTracker) {
+      PracticeTracker.saveAttempt(type, score, meta).catch(err => {
+        console.warn('Supabase attempt save failed:', err?.message || err);
+      });
+    }
   },
   getAvg(type) {
     const d=this.get(); if(!d[type]||!d[type].attempts) return null;
