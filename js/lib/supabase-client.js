@@ -1,6 +1,7 @@
 const SupabaseService = {
   client: null,
   config: window.SUPABASE_CONFIG || {},
+  speakingBucket: 'speaking-recordings',
 
   hasConfig() {
     return !!(this.config.url && this.config.anonKey);
@@ -30,6 +31,34 @@ const SupabaseService = {
 
   getClient() {
     return this.client || this.init();
+  },
+
+  normalizeStoragePath(filePath) {
+    return String(filePath || '').replace(/^\/+/, '').trim();
+  },
+
+  getPublicStorageUrl(bucketName, filePath) {
+    const normalizedPath = this.normalizeStoragePath(filePath);
+    if (!normalizedPath) {
+      console.error('[SupabaseStorage] Missing storage path for public URL generation.', { bucketName, filePath });
+      return '';
+    }
+
+    const client = this.getClient();
+    if (!client) {
+      console.error('[SupabaseStorage] Supabase client unavailable while generating public URL.', { bucketName, filePath: normalizedPath });
+      return '';
+    }
+
+    const { data } = client.storage.from(bucketName).getPublicUrl(normalizedPath);
+    const publicUrl = data?.publicUrl || '';
+    if (!publicUrl) {
+      console.error('[SupabaseStorage] Failed to generate public URL from storage path.', { bucketName, filePath: normalizedPath });
+      return '';
+    }
+
+    console.log('[SupabaseStorage] Generated public audio URL:', publicUrl);
+    return publicUrl;
   },
 };
 

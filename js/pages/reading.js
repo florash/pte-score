@@ -1,10 +1,13 @@
 // ── R&W Fill in Blanks ─────────────────────────────────────────────────────
 Pages['rw-fill-blanks'] = function() {
   let qIndex=0;
-  const questions=DB.rwFillBlanks;
+  const totalQuestions=DB.rwFillBlanks.length;
+  const questions=getAccessibleQuestions(DB.rwFillBlanks);
+  qIndex = getInitialQuestionIndex(questions);
 
   function render(){
     const q=questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'rwFillBlanks', questionText: q.parts.join(' ___ ') });
     let html=`
 <div class="page-header">
@@ -35,6 +38,7 @@ ${b.options.map(o=>`<option value="${o}">${o}</option>`).join('')}
     <button class="btn btn-secondary" onclick="RWFIB_prev()" ${qIndex===0?'disabled':''}>← Prev</button>
     <button class="btn btn-secondary" onclick="RWFIB_next()" ${qIndex===questions.length-1?'disabled':''}>Next →</button>
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
     $('#page-container').innerHTML=html;
   }
@@ -61,10 +65,12 @@ ${b.options.map(o=>`<option value="${o}">${o}</option>`).join('')}
 
 // ── MC Single Answer (Reading) ─────────────────────────────────────────────
 Pages['mc-single-reading'] = function() {
-  let qIndex=0; const questions=DB.mcSingleReading;
+  let qIndex=0; const totalQuestions=DB.mcSingleReading.length; const questions=getAccessibleQuestions(DB.mcSingleReading);
+  qIndex = getInitialQuestionIndex(questions);
 
   function render(){
     const q=questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'mcSingleReading', questionText: `${q.passage} ${q.question}` });
     $('#page-container').innerHTML=`
 <div class="page-header">
@@ -84,6 +90,7 @@ Pages['mc-single-reading'] = function() {
     <button class="btn btn-secondary" onclick="MCSR_prev()" ${qIndex===0?'disabled':''}>← Prev</button>
     <button class="btn btn-primary" onclick="MCSR_next()" ${qIndex===questions.length-1?'disabled':''}>Next →</button>
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
   }
 
@@ -103,10 +110,12 @@ Pages['mc-single-reading'] = function() {
 
 // ── MC Multiple Answer (Reading) ──────────────────────────────────────────
 Pages['mc-multiple-reading'] = function() {
-  let qIndex=0; const questions=DB.mcMultipleReading;
+  let qIndex=0; const totalQuestions=DB.mcMultipleReading.length; const questions=getAccessibleQuestions(DB.mcMultipleReading);
+  qIndex = getInitialQuestionIndex(questions);
 
   function render(){
     const q=questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'mcMultipleReading', questionText: `${q.passage} ${q.question}` });
     $('#page-container').innerHTML=`
 <div class="page-header">
@@ -127,6 +136,7 @@ Pages['mc-multiple-reading'] = function() {
     <button class="btn btn-secondary" onclick="MCMR_prev()" ${qIndex===0?'disabled':''}>← Prev</button>
     <button class="btn btn-secondary" onclick="MCMR_next()" ${qIndex===questions.length-1?'disabled':''}>Next →</button>
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
   }
 
@@ -155,11 +165,13 @@ Pages['mc-multiple-reading'] = function() {
 
 // ── Re-order Paragraphs ────────────────────────────────────────────────────
 Pages['reorder-paragraphs'] = function() {
-  let qIndex=0; const questions=DB.reorderParagraphs;
+  let qIndex=0; const totalQuestions=DB.reorderParagraphs.length; const questions=getAccessibleQuestions(DB.reorderParagraphs);
+  qIndex = getInitialQuestionIndex(questions);
   let dragged=null;
 
   function render(){
     const q=questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'reorderParagraphs', questionText: q.sentences.map(s => s.text).join(' ') });
     const shuffled=shuffle([...q.sentences]);
     $('#page-container').innerHTML=`
@@ -198,6 +210,7 @@ Pages['reorder-paragraphs'] = function() {
     <button class="btn btn-secondary" onclick="ROP_prev()" ${qIndex===0?'disabled':''}>← Prev</button>
     <button class="btn btn-secondary" onclick="ROP_next()" ${qIndex===questions.length-1?'disabled':''}>Next →</button>
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
   }
 
@@ -243,10 +256,12 @@ Pages['reorder-paragraphs'] = function() {
 
 // ── Reading Fill Blanks ────────────────────────────────────────────────────
 Pages['r-fill-blanks'] = function() {
-  let qIndex=0; const questions=DB.rFillBlanks;
+  let qIndex=0; const totalQuestions=DB.rFillBlanks.length; const questions=getAccessibleQuestions(DB.rFillBlanks);
+  qIndex = getInitialQuestionIndex(questions);
 
   function render(){
     const q=questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'rFillBlanks', questionText: q.fullText });
     let text=q.fullText;
     q.blanks.forEach(b=>{ text=text.replace(b.word,`<input class="blank-input" data-word="${b.word}" placeholder="${b.hint.split(',')[0]}..." style="min-width:${b.word.length*10}px">`); });
@@ -266,6 +281,7 @@ Pages['r-fill-blanks'] = function() {
     <button class="btn btn-secondary" onclick="RFIB_prev()" ${qIndex===0?'disabled':''}>← Prev</button>
     <button class="btn btn-secondary" onclick="RFIB_next()" ${qIndex===questions.length-1?'disabled':''}>Next →</button>
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
   }
 

@@ -10,7 +10,16 @@ Pages['answer-short'] = function() {
   let failedStartWindow = false;
   let player = null;
   const speechStartLimitMs = 5000;
-  const questions = DB.answerShort;
+  const sourceQuestions = getQuestionSet(DB.answerShort, 'answerShortQuestion', item => ({
+    id: item.id,
+    tag: `${t('prediction_badge')} · ${item.monthTag}`,
+    question: item.content,
+    answer: item.answer || '',
+    isPrediction: true,
+  }));
+  const totalQuestions = sourceQuestions.length;
+  const questions = getAccessibleQuestions(sourceQuestions);
+  qIndex = getInitialQuestionIndex(questions);
 
   function stopTimer() {
     if (timerObj) timerObj.stop();
@@ -57,10 +66,10 @@ Pages['answer-short'] = function() {
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget">
   <button class="record-btn idle" id="rec-btn" onclick="ASQ_startRecord()">🎤</button>
-  <div class="record-status">${message || 'Ready to answer — keep it short and clear'}</div>
+  <div class="record-status">${message || t('asq_ready_default')}</div>
   <div class="recorder-actions">
-    <button class="btn btn-primary" onclick="ASQ_startRecord()">Start Recording</button>
-    <button class="btn btn-secondary" onclick="ASQ_reset()">Done</button>
+    <button class="btn btn-primary" onclick="ASQ_startRecord()">${t('btn_start_recording')}</button>
+    <button class="btn btn-secondary" onclick="ASQ_reset()">${t('btn_done')}</button>
   </div>
 </div>`;
     stopTimer();
@@ -70,37 +79,39 @@ Pages['answer-short'] = function() {
 
   function render() {
     const q = questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'answerShort', questionText: q.question });
     $('#page-container').innerHTML = `
 <div class="page-header">
-  <h1>Answer Short Question <span class="badge badge-speaking">Speaking</span></h1>
-  <p>Listen to the question and answer with one or a few words.</p>
+  <h1>${t('asq_title')} <span class="badge badge-speaking">${t('badge_speaking')}</span></h1>
+  <p>${t('asq_subtitle')}</p>
 </div>
 <div class="card">
   <div class="question-nav">
-    <span class="q-number">Question ${qIndex+1} / ${questions.length}</span>
+    <span class="q-number">${t('question_label')} ${qIndex+1} ${t('question_of')} ${questions.length}</span>
     <div id="timer-el" class="timer"><span class="timer-dot"></span>00:00</div>
   </div>
-  <div class="q-instruction">🔊 Listen to the question, then give a short spoken answer.</div>
+  <div class="q-instruction">${t('asq_instruction')}</div>
   <div class="audio-widget">
     <button class="audio-btn" id="play-btn" onclick="ASQ_play()">▶</button>
     <div class="audio-progress">
-      <div class="audio-label">Listen to the question</div>
+      <div class="audio-label">${t('asq_listen_label')}</div>
       <div class="audio-progress-bar"><div class="audio-progress-fill" id="ap-fill" style="width:0%"></div></div>
     </div>
   </div>
   <div id="recorder-area">
     <div class="recorder-widget">
       <button class="record-btn idle" id="rec-btn" disabled>🎤</button>
-      <div class="record-status">Play the question first</div>
+      <div class="record-status">${t('asq_play_first')}</div>
     </div>
   </div>
   <div id="result-area"></div>
   <hr class="section-divider">
   <div class="btn-group">
-    <button class="btn btn-secondary" onclick="ASQ_prev()" ${qIndex===0 ? 'disabled' : ''}>← Prev</button>
-    <button class="btn btn-primary" onclick="ASQ_next()" ${qIndex===questions.length-1 ? 'disabled' : ''}>Next →</button>
+    <button class="btn btn-secondary" onclick="ASQ_prev()" ${qIndex===0 ? 'disabled' : ''}>${t('btn_prev')}</button>
+    <button class="btn btn-primary" onclick="ASQ_next()" ${qIndex===questions.length-1 ? 'disabled' : ''}>${t('btn_next')}</button>
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
   }
 
@@ -140,11 +151,11 @@ Pages['answer-short'] = function() {
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget recording">
   <button class="record-btn recording" onclick="ASQ_stopRecord()">⏹</button>
-  <div class="record-status recording">🔴 Speak your answer</div>
+  <div class="record-status recording">${t('asq_status_recording')}</div>
   <div class="waveform">${Array(5).fill('<div class="waveform-bar"></div>').join('')}</div>
   <div class="recorder-actions">
-    <button class="btn btn-danger" onclick="ASQ_cancelRecord()">Cancel</button>
-    <button class="btn btn-secondary" onclick="ASQ_exitRecord()">Done</button>
+    <button class="btn btn-danger" onclick="ASQ_cancelRecord()">${t('btn_cancel')}</button>
+    <button class="btn btn-secondary" onclick="ASQ_exitRecord()">${t('btn_done')}</button>
   </div>
 </div>`;
     timerObj = new CountdownTimer($('#timer-el'), 10, null, ASQ_stopRecord);
@@ -163,7 +174,7 @@ Pages['answer-short'] = function() {
         const mode = stopMode;
         recorder = null;
         if (mode === 'cancel' || mode === 'exit') {
-          readyState(mode === 'cancel' ? 'Recording cancelled. Try again.' : 'Attempt exited. You can answer again.');
+          readyState(mode === 'cancel' ? t('asq_cancel_msg') : t('asq_exit_msg'));
           return;
         }
         ASQ_showResult();
@@ -213,7 +224,7 @@ Pages['answer-short'] = function() {
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget">
   <button class="record-btn idle" id="rec-btn" disabled>🎤</button>
-  <div class="record-status">Play the question first</div>
+  <div class="record-status">${t('asq_play_first')}</div>
 </div>`;
   };
 
@@ -224,13 +235,13 @@ Pages['answer-short'] = function() {
   <div class="recorder-result-main">
     <div class="recorder-result-icon">✓</div>
     <div class="recorder-result-copy">
-      <div class="recorder-result-title">${failedStartWindow ? 'Failed to start in time' : 'Answer captured'}</div>
-      <div class="recorder-result-sub">${failedStartWindow ? 'You must start speaking within 5 seconds to receive a score.' : 'Check the result below or record one more time.'}</div>
+      <div class="recorder-result-title">${failedStartWindow ? t('result_failed_start') : t('asq_result_title_ok')}</div>
+      <div class="recorder-result-sub">${failedStartWindow ? t('result_failed_sub') : t('asq_result_sub_ok')}</div>
     </div>
   </div>
   <div class="result-actions compact">
-    <button class="btn btn-primary" onclick="ASQ_startRecord()">Re-record</button>
-    <button class="btn btn-secondary" onclick="ASQ_reset()">Done</button>
+    <button class="btn btn-primary" onclick="ASQ_startRecord()">${t('btn_re_record')}</button>
+    <button class="btn btn-secondary" onclick="ASQ_reset()">${t('btn_done')}</button>
   </div>
 </div>`;
     if (failedStartWindow) {
@@ -241,8 +252,8 @@ Pages['answer-short'] = function() {
     <span style="font-size:24px">⚠️</span>
     <span style="font-size:16px;font-weight:700;color:var(--warning)">Fail</span>
   </div>
-  <div class="score-bar-row"><div class="score-bar-label">Score</div><div class="transcript-box" style="padding:6px 12px;color:#92400e">10 / 90</div></div>
-  <div class="score-bar-row" style="margin-top:8px"><div class="score-bar-label">Rule</div><div class="transcript-box" style="padding:6px 12px">You must start speaking within 5 seconds after recording begins to receive a score.</div></div>
+  <div class="score-bar-row"><div class="score-bar-label">${t('asq_score_label')}</div><div class="transcript-box" style="padding:6px 12px;color:#92400e">10 / 90</div></div>
+  <div class="score-bar-row" style="margin-top:8px"><div class="score-bar-label">${t('asq_rule_label')}</div><div class="transcript-box" style="padding:6px 12px">${t('score_fail_no_start')}</div></div>
 </div>`;
       return;
     }
@@ -256,10 +267,10 @@ Pages['answer-short'] = function() {
 <div class="card" style="margin-top:12px">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
     <span style="font-size:24px">${icon}</span>
-    <span style="font-size:16px;font-weight:700;color:${color}">${correct ? 'Correct!' : 'Incorrect'}</span>
+    <span style="font-size:16px;font-weight:700;color:${color}">${correct ? t('asq_result_correct') : t('asq_result_incorrect')}</span>
   </div>
-  <div class="score-bar-row"><div class="score-bar-label">Correct answer</div><div class="transcript-box" style="padding:6px 12px">${q.answer}</div></div>
-  <div class="score-bar-row" style="margin-top:8px"><div class="score-bar-label">Your answer</div><div class="transcript-box" style="padding:6px 12px;color:${color}">${finalText || '(no speech)'}</div></div>
+  <div class="score-bar-row"><div class="score-bar-label">${t('asq_correct_answer')}</div><div class="transcript-box" style="padding:6px 12px">${q.answer}</div></div>
+  <div class="score-bar-row" style="margin-top:8px"><div class="score-bar-label">${t('asq_your_answer')}</div><div class="transcript-box" style="padding:6px 12px;color:${color}">${finalText || t('asq_no_speech')}</div></div>
 </div>`;
   };
 

@@ -1,195 +1,546 @@
-// ── Gemini AI Scorer ────────────────────────────────────────────────────────
-// Uses Google Gemini 1.5 Flash — free tier (no cost, just needs a free API key).
-// Get a free key at: https://aistudio.google.com/app/apikey
-
 const AIScorer = {
-  model: 'gemini-1.5-flash',
+  recentRecordingsKey: 'pte_recent_question_recordings_v1',
 
-  getKey() { return localStorage.getItem('pte_gemini_key') || ''; },
+  getBaseUrl() {
+    const env = window.__PTE_ENV__ || {};
+    const appConfig = window.APP_CONFIG || {};
+    return (appConfig.API_BASE_URL || env.PTE_API_BASE_URL || window.PTE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
+  },
 
-  hasKey() { return !!this.getKey(); },
+  getNetworkDebugMessage(error, endpoint = '') {
+    const baseUrl = this.getBaseUrl();
+    const target = `${baseUrl}${endpoint}`;
+    console.error('API network error:', error);
+    return `Unable to connect to AI scoring service. Target: ${target}.`;
+  },
 
-  async call(systemPrompt, userContent) {
-    const key = this.getKey();
-    if (!key) throw new Error('No API key. Go to ⚙️ Settings to add your free Gemini API key.');
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(key)}`,
-      {
+  buildUrl(path) {
+    return `${this.getBaseUrl()}${path}`;
+  },
+
+  async getAuthToken() {
+    if (!window.AppAuth || !AppAuth.isLoggedIn()) return '';
+    if (typeof AppAuth.getAccessToken === 'function') {
+      return (await AppAuth.getAccessToken()) || '';
+    }
+    return AppAuth.session?.access_token || '';
+  },
+
+  getErrorMessage(error, fallback = 'AI scoring is unavailable right now.') {
+    const code = error?.code || '';
+    if (code === 'AUTH_REQUIRED') return 'Sign in to use AI scoring';
+    if (code === 'DAILY_LIMIT') return 'Daily AI scoring limit reached';
+    if (code === 'TIMEOUT') return 'The AI scoring request timed out. Please try again.';
+    if (code === 'SERVICE_UNAVAILABLE') return 'AI scoring service is temporarily unavailable.';
+    if (code === 'PARSE_ERROR') return 'We could not read the scoring result. Please try again.';
+    if (code === 'NETWORK_ERROR') return error?.message || 'Unable to connect to AI scoring service. Please try again.';
+    if (code === 'REQUEST_FAILED') return error?.message || 'AI scoring request failed.';
+    return error?.message || fallback;
+  },
+
+  buildHttpError(response, body, fallbackMessage) {
+    console.error('API response error body:', body);
+    const message = body?.error || body?.message || fallbackMessage || `AI scoring failed (HTTP ${response.status})`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = 'REQUEST_FAILED';
+    if (response.status === 401) error.code = 'AUTH_REQUIRED';
+    else if (response.status === 429) error.code = message === 'Daily AI scoring limit reached' ? 'DAILY_LIMIT' : 'RATE_LIMIT';
+    else if (response.status >= 500) error.code = 'SERVICE_UNAVAILABLE';
+    return error;
+  },
+
+  async parseJsonResponse(response) {
+    const rawText = await response.text();
+    if (!rawText) return null;
+    try {
+      return JSON.parse(rawText);
+    } catch (error) {
+      console.error('API raw response body:', rawText);
+      const parseError = new Error(response.ok ? 'We could not read the scoring result. Please try again.' : `AI scoring failed (HTTP ${response.status})`);
+      parseError.code = response.ok ? 'PARSE_ERROR' : 'REQUEST_FAILED';
+      parseError.status = response.status;
+      throw parseError;
+    }
+  },
+
+  async requestScore(payload) {
+    if (!window.AppAuth || !AppAuth.isLoggedIn()) {
+      const error = new Error('Sign in to use AI scoring');
+      error.code = 'AUTH_REQUIRED';
+      throw error;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const token = await this.getAuthToken();
+      const url = this.buildUrl('/api/score');
+      console.log('Calling API:', url);
+      const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: userContent }] }],
-          generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const body = await this.parseJsonResponse(response);
+
+      if (!response.ok || body?.success === false) {
+        throw this.buildHttpError(response, body, `AI scoring failed (HTTP ${response.status})`);
       }
-    );
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `API error ${res.status}`);
+
+      return body.data;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const timeoutError = new Error('The AI scoring request timed out. Please try again.');
+        timeoutError.code = 'TIMEOUT';
+        throw timeoutError;
+      }
+      if (error instanceof TypeError) {
+        const networkError = new Error(this.getNetworkDebugMessage(error, '/api/score'));
+        networkError.code = 'NETWORK_ERROR';
+        throw networkError;
+      }
+      console.error('API error:', error);
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
-    const data = await res.json();
-    return data.candidates[0].content.parts[0].text;
   },
 
-  // ── Read Aloud / Repeat Sentence ──────────────────────────────────────────
-  async scoreSpoken(transcript, reference, taskType = 'Read Aloud') {
-    const isRepeat = taskType === 'Repeat Sentence';
-    const sys = `You are a PTE Academic examiner scoring ${taskType} responses using Pearson's official marking criteria.
-
-${isRepeat ? `REPEAT SENTENCE SCORING RUBRIC:
-- content (0–3): 3=all words in correct sequence, 2=most words in order (≥50%), 1=some words (>5%), 0=very few or none
-- fluency (0–5): 5=native-like smooth delivery, 4=minor hesitations, 3=some breaks, 2=frequent pauses/repetitions, 1=very hesitant, 0=unintelligible
-- pronunciation (0–5): 5=native-like phonemes and stress, 4=minor errors, 3=some errors without affecting comprehension, 2=errors affecting intelligibility, 1=difficult to understand, 0=unintelligible` :
-`READ ALOUD SCORING RUBRIC:
-- content (0–5): Count words correctly read in order. 5=90%+ words in sequence, 4=75%, 3=50%, 2=25%, 1=a few, 0=none
-- fluency (0–5): 5=natural pace with appropriate phrasing and stress, 4=minor pauses, 3=some unnatural breaks, 2=frequent pauses/false starts, 1=very hesitant, 0=unintelligible
-- pronunciation (0–5): 5=all phonemes correct with natural stress, 4=minor phonemic errors, 3=some errors, 2=errors reducing intelligibility, 1=mostly unintelligible, 0=unintelligible`}
-
-Return ONLY valid JSON (no markdown, no explanation):
-{"overall":number,"content":number,"fluency":number,"pronunciation":number,"feedback":string,"tips":string[]}
-All scores use the PTE 10–90 scale (convert raw scores: 10 + raw/max * 80, minimum 38 if any words spoken).
-feedback: 1–2 sentences on the main strength and weakness.
-tips: 2–3 short actionable improvement points.`;
-
-    const user = `Reference text: "${reference}"
-Student transcript: "${transcript || '(no speech detected)'}"
-Score this ${taskType} response according to the official PTE rubric above.`;
-    const raw = await this.call(sys, user);
-    return JSON.parse(raw);
-  },
-
-  // ── Writing (Essay / Summarize Written Text) ──────────────────────────────
-  async scoreWriting(text, prompt, taskType = 'Essay', wordRange = null) {
-    const isEssay = taskType === 'Essay';
-    const wInfo = wordRange ? ` Required word range: ${wordRange[0]}–${wordRange[1]} words.` : '';
-    const sys = `You are a PTE Academic examiner scoring ${taskType} responses using Pearson's official marking criteria.
-
-${isEssay ? `WRITE ESSAY SCORING RUBRIC (total 15 raw points → PTE 10–90 scale):
-- content (0–3): 3=fully addresses all aspects of the task with depth, 2=addresses main topic adequately, 1=partially addresses, 0=off-topic or no content
-- form (0–2): 2=within ${wordRange ? wordRange[0]+'-'+wordRange[1] : '200-300'} words, 1=within 10% of range, 0=outside range
-- development_structure_coherence (0–2): 2=clear intro/body/conclusion with logical progression and cohesive devices, 1=some structure, 0=no clear structure
-- grammar (0–2): 2=varied complex structures used accurately, 1=some complex structures with some errors, 0=basic structures only or frequent errors
-- vocabulary (0–2): 2=sophisticated and precise word choice, 1=adequate range, 0=limited or repetitive
-- spelling (0–2): 2=no spelling errors, 1=1–2 minor errors, 0=multiple errors` :
-`SUMMARIZE WRITTEN TEXT SCORING RUBRIC (total 7 raw points → PTE 10–90 scale):
-- content (0–2): 2=accurately identifies all main points from the text, 1=identifies some main points, 0=misses main idea
-- form (0–1): 1=single sentence within ${wordRange ? wordRange[0]+'-'+wordRange[1] : '25-50'} words, 0=otherwise
-- grammar (0–2): 2=complex grammar used accurately, 1=some grammatical control, 0=frequent errors
-- vocabulary (0–2): 2=appropriate academic vocabulary, 1=adequate range, 0=limited range`}
-
-Return ONLY valid JSON (no markdown):
-{"overall":number,"content":number,"form":number,"grammar":number,"vocabulary":number,"spelling":number,"feedback":string,"band":string,"tips":string[]}
-overall is PTE score 10–90. band is one of: "Expert (79–90)", "Good (65–78)", "Average (50–64)", "Building Up (<50)".
-feedback: 2–3 sentences on main strengths and weaknesses.
-tips: 2–3 specific improvement suggestions.`;
-
-    const user = `Task prompt: "${prompt}"${wInfo}
-Student response (${countWords(text)} words): "${text || '(empty)'}"
-Score this ${taskType} response according to the official PTE rubric above.`;
-    const raw = await this.call(sys, user);
-    return JSON.parse(raw);
-  },
-
-  // ── Write From Dictation ──────────────────────────────────────────────────
-  async scoreDictation(typed, original) {
-    const sys = `You are a PTE Academic examiner scoring Write From Dictation responses.
-
-WRITE FROM DICTATION SCORING:
-Each correct word in the correct position scores 1 point. Spelling must be exact.
-Total score = correct words / total words * 90 (minimum 10 if any words correct, 0 if blank).
-
-Return ONLY valid JSON (no markdown):
-{"overall":number,"wordsCorrect":number,"wordsTotal":number,"errors":string[],"feedback":string}
-overall is 0–90 PTE scale. errors lists specific wrong/missing words. feedback is 1 sentence.`;
-
-    const user = `Original sentence: "${original}"
-Student typed: "${typed || '(empty)'}"
-Score this Write From Dictation response.`;
-    const raw = await this.call(sys, user);
-    return JSON.parse(raw);
-  },
-
-  // ── Summarize Spoken / Summarize Written ──────────────────────────────────
-  async scoreSummary(text, sourceText, wordRange, taskType = 'Summarize Spoken Text') {
-    const sys = `You are a PTE Academic examiner scoring ${taskType} responses using Pearson's official criteria.
-
-SUMMARIZE SPOKEN TEXT SCORING RUBRIC (total 9 raw points → PTE 10–90 scale):
-- content (0–2): 2=captures all key points from the lecture, 1=captures some key points, 0=misses key content
-- form (0–1): 1=50–70 words as required, 0=outside range
-- grammar (0–2): 2=varied and accurate grammar, 1=some accuracy, 0=frequent errors
-- vocabulary (0–2): 2=appropriate academic vocabulary, 1=adequate, 0=limited
-- spelling (0–2): 2=no errors, 1=minor errors, 0=multiple errors
-
-Return ONLY valid JSON (no markdown):
-{"overall":number,"content":number,"form":number,"grammar":number,"vocabulary":number,"feedback":string,"tips":string[]}
-overall is PTE score 10–90. feedback: 2–3 sentences. tips: 2–3 actionable points.`;
-
-    const user = `Source audio transcript: "${sourceText}"
-Required word range: ${wordRange[0]}–${wordRange[1]} words.
-Student response (${countWords(text)} words): "${text || '(empty)'}"
-Score this ${taskType} response.`;
-    const raw = await this.call(sys, user);
-    return JSON.parse(raw);
-  },
-
-  // ── Render AI score panel ─────────────────────────────────────────────────
-  renderScorePanel(score, type = 'speaking') {
-    const overall = score.overall ?? score.score ?? 0;
-    const bars = [];
-    if (type === 'speaking') {
-      bars.push(
-        { label: 'Content',       val: score.content ?? 0 },
-        { label: 'Fluency',       val: score.fluency ?? 0 },
-        { label: 'Pronunciation', val: score.pronunciation ?? 0 },
-      );
-    } else if (type === 'writing') {
-      bars.push(
-        { label: 'Content',    val: score.content ?? 0 },
-        { label: 'Form',       val: score.form ?? 0 },
-        { label: 'Grammar',    val: score.grammar ?? 0 },
-        { label: 'Vocabulary', val: score.vocabulary ?? 0 },
-      );
-    } else if (type === 'dictation') {
-      bars.push({ label: 'Accuracy', val: overall });
+  async requestAudioScore({ file, payload }) {
+    if (!window.AppAuth || !AppAuth.isLoggedIn()) {
+      const error = new Error('Sign in to use AI scoring');
+      error.code = 'AUTH_REQUIRED';
+      throw error;
+    }
+    if (!file) {
+      const error = new Error('Audio recording is unavailable. Please record again.');
+      error.code = 'NO_AUDIO';
+      throw error;
     }
 
-    const tipsHtml = score.tips?.length
-      ? `<div style="margin-top:10px"><strong>Tips:</strong><ul style="margin:6px 0 0 16px;font-size:13px;color:var(--text-light)">${score.tips.map(t=>`<li>${t}</li>`).join('')}</ul></div>`
-      : '';
-    const errorsHtml = score.errors?.length
-      ? `<div style="margin-top:10px"><strong>Errors:</strong><ul style="margin:6px 0 0 16px;font-size:13px;color:var(--danger)">${score.errors.map(e=>`<li>${e}</li>`).join('')}</ul></div>`
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const token = await this.getAuthToken();
+      const formData = new FormData();
+      formData.append('file', file, file.name || 'recording.webm');
+      Object.entries(payload).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) formData.append(key, String(value));
+      });
+
+      const url = this.buildUrl('/api/score-audio');
+      console.log('Calling API:', url);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      const body = await this.parseJsonResponse(response);
+
+      if (!response.ok || body?.success === false) {
+        throw this.buildHttpError(response, body, `AI scoring failed (HTTP ${response.status})`);
+      }
+
+      return body.data;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const timeoutError = new Error('The AI scoring request timed out. Please try again.');
+        timeoutError.code = 'TIMEOUT';
+        throw timeoutError;
+      }
+      if (error instanceof TypeError) {
+        const networkError = new Error(this.getNetworkDebugMessage(error, '/api/score-audio'));
+        networkError.code = 'NETWORK_ERROR';
+        throw networkError;
+      }
+      console.error('API error:', error);
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  },
+
+  async scoreSpoken(params) {
+    return this.requestScore({
+      task: 'speaking',
+      promptType: params.promptType || 'Read Aloud',
+      transcript: params.transcript || '',
+      questionText: params.questionText || null,
+      referenceAnswer: params.referenceAnswer || null,
+    });
+  },
+
+  async scoreWriting(params) {
+    return this.requestScore({
+      task: 'writing',
+      promptType: params.promptType || 'Write Essay',
+      transcript: params.transcript || '',
+      questionText: params.questionText || null,
+      referenceAnswer: params.referenceAnswer || null,
+    });
+  },
+
+  async scoreDictation(params) {
+    return this.requestScore({
+      task: 'dictation',
+      promptType: params.promptType || 'Write From Dictation',
+      transcript: params.transcript || '',
+      questionText: params.questionText || null,
+      referenceAnswer: params.referenceAnswer || null,
+    });
+  },
+
+  async scoreSummary(params) {
+    return this.requestScore({
+      task: 'summary',
+      promptType: params.promptType || 'Summarize Spoken Text',
+      transcript: params.transcript || '',
+      questionText: params.questionText || null,
+      referenceAnswer: params.referenceAnswer || null,
+    });
+  },
+
+  async scoreAudio(params) {
+    const sampleRate = params.sampleRateHertz
+      || window.MicAccess?.stream?.getAudioTracks?.()[0]?.getSettings?.().sampleRate
+      || 48000;
+    return this.requestAudioScore({
+      file: params.file,
+      payload: {
+        task: params.task || 'speaking',
+        promptType: params.promptType || 'Read Aloud',
+        questionText: params.questionText || '',
+        referenceAnswer: params.referenceAnswer || '',
+        mimeType: params.mimeType || params.file?.type || 'audio/webm',
+        sampleRateHertz: sampleRate,
+        durationSeconds: params.durationSeconds || '',
+      },
+    });
+  },
+
+  renderLoading(message) {
+    return `<div class="card" style="margin-top:12px;text-align:center;padding:28px">
+<div class="spinner" style="margin:0 auto 12px"></div>
+<div style="font-size:14px;color:var(--text);font-weight:600">${message || t('score_analyzing')}</div>
+<div style="font-size:13px;color:var(--text-light);margin-top:6px">${t('score_generating')}</div>
+</div>`;
+  },
+
+  renderError(message) {
+    return `<div style="background:#fff8ed;border:1px solid #f59e0b;border-radius:10px;padding:14px;font-size:13.5px;color:#92400e;margin-top:8px">
+<strong>${t('score_unavailable')}</strong><br>${Scorer.escapeHtml(message)}
+</div>`;
+  },
+
+  renderAuthGate() {
+    return `<div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;font-size:13.5px;color:#1d4ed8;margin-top:8px">
+<strong>${t('score_sign_in_msg')}</strong><br>
+<button class="btn btn-primary" style="margin-top:10px" onclick="AuthUI.open('login')">${t('btn_sign_in')}</button>
+</div>`;
+  },
+
+  metricRows(metrics) {
+    return metrics
+      .filter(item => typeof item.value === 'number')
+      .map(item => `
+<div class="score-bar-row">
+  <div class="score-bar-label">${item.label}</div>
+  <div class="score-bar-track"><div class="score-bar-fill" style="width:${Math.max(0, Math.min(100, Math.round(item.value / 90 * 100)))}%;background:${Scorer.gradeColor(Math.round(item.value / 90 * 100))}"></div></div>
+  <div class="score-bar-val">${item.value}</div>
+</div>`)
+      .join('');
+  },
+
+  metricLabel(key, fallback) {
+    return t(key) || fallback;
+  },
+
+  renderStructuredResult(result, options = {}) {
+    const title = options.title || t('score_overall');
+    const subtitle = options.subtitle || '';
+    const metrics = options.metrics || [];
+    const feedbackText = typeof result.feedback === 'object' && result.feedback
+      ? (result.feedback.summary || t('score_no_feedback'))
+      : (result.feedback || t('score_no_feedback'));
+    const transcriptHtml = result.transcript
+      ? `<div class="card" style="margin-top:12px"><div class="card-title">${t('score_transcript_label')}</div><div class="transcript-box">${Scorer.escapeHtml(result.transcript)}</div></div>`
       : '';
 
     return `
-<div class="score-panel" style="margin-top:12px">
-  <div style="display:flex;align-items:flex-end;gap:16px">
-    <div><div class="score-big">${overall}</div><div class="score-label">AI Score / 90 (PTE scale)${score.band?` — ${score.band}`:''}</div></div>
-    <div style="margin-left:auto;background:rgba(255,255,255,0.15);padding:4px 12px;border-radius:20px;font-size:12px">Powered by Gemini AI</div>
+<div class="score-panel" style="margin-top:14px">
+  <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap">
+    <div>
+      <div class="score-big" style="color:#fff">${result.overall ?? 0}</div>
+      <div class="score-label">${Scorer.escapeHtml(title)}</div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="text-align:right">
+      <div style="font-size:18px;font-weight:700;color:#fff">${Scorer.escapeHtml(subtitle)}</div>
+      <div style="font-size:11px;opacity:0.7">${t('score_scale')}</div>
+    </div>
   </div>
 </div>
 <div class="card" style="margin-top:10px">
-  ${bars.map(b=>`<div class="score-bar-row">
-<div class="score-bar-label">${b.label}</div>
-<div class="score-bar-track"><div class="score-bar-fill" style="width:${Math.round(b.val/90*100)}%;background:${Scorer.gradeColor(Math.round(b.val/90*100))}"></div></div>
-<div class="score-bar-val">${b.val}</div>
-</div>`).join('')}
-  ${score.feedback ? `<hr class="section-divider"><div style="font-size:13.5px;line-height:1.6">${score.feedback}</div>` : ''}
-  ${tipsHtml}${errorsHtml}
+  ${this.metricRows(metrics)}
+  <hr class="section-divider">
+  <div class="card-title">${t('score_feedback_label')}</div>
+  <div style="font-size:13.5px;line-height:1.7;color:var(--text-light)">${Scorer.escapeHtml(feedbackText)}</div>
+</div>
+${transcriptHtml}`;
+  },
+
+  feedbackList(items, emptyText) {
+    const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!rows.length) return `<div style="font-size:13px;color:var(--text-light)">${Scorer.escapeHtml(emptyText || t('score_no_feedback'))}</div>`;
+    return `<div class="speaking-feedback-list">${rows.map(item => `<div class="speaking-feedback-item">${Scorer.escapeHtml(item)}</div>`).join('')}</div>`;
+  },
+
+  renderSavedAttempt(result) {
+    if (!result?.attemptId && !result?.audioPath && !result?.audioUrl) return '';
+    const derivedAudioUrl = result.audioPath && window.SupabaseService
+      ? SupabaseService.getPublicStorageUrl(SupabaseService.speakingBucket, result.audioPath)
+      : '';
+    if (result.audioPath && !derivedAudioUrl) {
+      console.error('[AIScorer] Saved attempt has audioPath but public URL generation failed.', {
+        attemptId: result.attemptId,
+        audioPath: result.audioPath,
+      });
+    }
+    const resolvedAudioUrl = derivedAudioUrl || result.audioUrl || '';
+    const audioPlayer = resolvedAudioUrl
+      ? `<audio class="result-audio-player" controls preload="none" src="${Scorer.escapeHtml(resolvedAudioUrl)}"></audio>`
+      : `<div class="result-audio-empty">${t('score_replay_empty')}</div>`;
+    const transcriptMeta = typeof result.transcriptWordCount === 'number'
+      ? `<span>${result.transcriptWordCount} words</span>`
+      : '';
+    const durationMeta = typeof result.durationSeconds === 'number'
+      ? `<span>${Math.round(result.durationSeconds * 10) / 10}s</span>`
+      : '';
+    const issueMeta = result.issueSummary
+      ? `<div class="speaking-saved-summary">${Scorer.escapeHtml(result.issueSummary)}</div>`
+      : '';
+
+    return `
+<div class="card speaking-result-card speaking-saved-card" style="animation-delay:.1s">
+  <div class="speaking-saved-head">
+    <div>
+      <div class="card-title">${t('score_saved_title')}</div>
+      <div class="speaking-saved-copy">${t('score_saved_copy')}</div>
+    </div>
+    <button class="btn btn-outline" type="button" onclick="navigate('progress')">${t('btn_view_progress')}</button>
+  </div>
+  <div class="speaking-saved-meta">
+    ${result.audioPath ? `<span>${Scorer.escapeHtml(result.audioPath)}</span>` : ''}
+    ${durationMeta}
+    ${transcriptMeta}
+  </div>
+  ${issueMeta}
+  <div class="speaking-saved-player">
+    ${audioPlayer}
+  </div>
 </div>`;
   },
 
-  renderLoading() {
-    return `<div class="card" style="margin-top:12px;text-align:center;padding:28px">
-<div class="spinner" style="margin:0 auto 12px"></div>
-<div style="font-size:13px;color:var(--text-light)">Gemini AI is scoring your response…</div>
+  renderInlineSavedRecording(options = {}) {
+    const audioUrl = options.audioUrl || '';
+    if (!audioUrl) return '';
+    const title = options.title || 'This question recording';
+    const copy = options.copy || 'Replay the exact answer you just submitted for this question.';
+    return `
+<div class="card speaking-result-card speaking-inline-recording" style="animation-delay:.02s">
+  <div class="card-title">${Scorer.escapeHtml(title)}</div>
+  <div class="speaking-saved-copy">${Scorer.escapeHtml(copy)}</div>
+  <div class="speaking-saved-player">
+    <audio class="result-audio-player" controls preload="metadata" src="${Scorer.escapeHtml(audioUrl)}"></audio>
+  </div>
 </div>`;
   },
 
-  renderError(msg) {
-    return `<div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px;font-size:13.5px;color:#78350f;margin-top:8px">
-⚠️ AI Scoring unavailable: ${msg}<br>
-<a onclick="navigate('settings')" style="color:var(--primary);cursor:pointer;text-decoration:underline">Go to Settings</a> to add your free Gemini API key.
+  getPlayableAudioUrl(result = {}, fallbackUrl = '') {
+    const derivedAudioUrl = result.audioPath && window.SupabaseService
+      ? SupabaseService.getPublicStorageUrl(SupabaseService.speakingBucket, result.audioPath)
+      : '';
+    if (result.audioPath && !derivedAudioUrl && !result.audioUrl && !fallbackUrl) {
+      console.error('[AIScorer] Recording path exists but no playable URL could be generated.', {
+        attemptId: result.attemptId,
+        audioPath: result.audioPath,
+      });
+    }
+    return derivedAudioUrl || result.audioUrl || fallbackUrl || '';
+  },
+
+  loadRecentQuestionRecordings() {
+    try {
+      return JSON.parse(window.localStorage.getItem(this.recentRecordingsKey) || '{}') || {};
+    } catch (error) {
+      console.error('[AIScorer] Failed to read recent question recordings.', error);
+      return {};
+    }
+  },
+
+  saveRecentQuestionRecordings(payload) {
+    try {
+      window.localStorage.setItem(this.recentRecordingsKey, JSON.stringify(payload));
+    } catch (error) {
+      console.error('[AIScorer] Failed to persist recent question recordings.', error);
+    }
+  },
+
+  saveQuestionRecording(questionKey, entry) {
+    if (!questionKey || !entry?.audioUrl) return;
+    const payload = this.loadRecentQuestionRecordings();
+    const existing = Array.isArray(payload[questionKey]) ? payload[questionKey] : [];
+    payload[questionKey] = [entry, ...existing].filter(item => item && item.audioUrl).slice(0, 5);
+    this.saveRecentQuestionRecordings(payload);
+  },
+
+  getQuestionRecordings(questionKey) {
+    if (!questionKey) return [];
+    const payload = this.loadRecentQuestionRecordings();
+    return Array.isArray(payload[questionKey]) ? payload[questionKey] : [];
+  },
+
+  renderQuestionRecordingHistory(questionKey, options = {}) {
+    const items = this.getQuestionRecordings(questionKey);
+    if (!items.length) return '';
+    const title = options.title || t('score_recent_title');
+    const rows = items.map((item, index) => `
+<div class="speaking-history-item">
+  <div class="speaking-history-meta">
+    <span class="speaking-history-badge">${index === 0 ? t('score_latest') : `${t('score_attempt')}${index + 1}`}</span>
+    ${item.createdAt ? `<span>${Scorer.escapeHtml(item.createdAt)}</span>` : ''}
+    ${typeof item.score === 'number' ? `<span>Score ${item.score}</span>` : ''}
+  </div>
+  <audio class="result-audio-player" controls preload="metadata" src="${Scorer.escapeHtml(item.audioUrl)}"></audio>
+</div>`).join('');
+    return `
+<div class="card speaking-result-card speaking-inline-recording">
+  <div class="card-title">${Scorer.escapeHtml(title)}</div>
+  <div class="speaking-saved-copy">${t('score_recent_copy')}</div>
+  <div class="speaking-history-list">${rows}</div>
 </div>`;
+  },
+
+  renderSpeakingActions(context = {}) {
+    const saveLabel = context.isLoggedIn ? t('score_save_label') : t('score_save_signin');
+    const buttons = [
+      context.reRecordAction ? `<button class="btn btn-primary" onclick="${context.reRecordAction}">${t('btn_re_record')}</button>` : '',
+      context.tryAgainAction ? `<button class="btn btn-secondary" onclick="${context.tryAgainAction}">${t('btn_try_again')}</button>` : '',
+      context.isLoggedIn
+        ? `<button class="btn btn-outline" type="button" disabled aria-disabled="true">${Scorer.escapeHtml(saveLabel)}</button>`
+        : `<button class="btn btn-outline" type="button" onclick="openLoginPrompt()">${Scorer.escapeHtml(saveLabel)}</button>`,
+    ].filter(Boolean).join('');
+    return `<div class="speaking-result-actions">${buttons}</div>`;
+  },
+
+  renderSpeakingResult(result, context = {}) {
+    const feedback = typeof result.feedback === 'object' && result.feedback ? result.feedback : null;
+    const feedbackSummary = feedback?.summary || result.feedback || t('score_no_feedback');
+    const diff = context.referenceText && window.TextDiff
+      ? TextDiff.compareText(context.referenceText, result.transcript || '')
+      : null;
+
+    const heroHtml = `
+<div class="score-panel speaking-result-hero" style="margin-top:14px">
+  <div class="speaking-result-hero-top">
+    <div>
+      <div class="score-big" style="color:#fff">${result.overall ?? 0}</div>
+      <div class="score-label">${Scorer.escapeHtml(context.promptType || '')}</div>
+    </div>
+    <div class="speaking-result-badge">${t('score_ai_label')}</div>
+  </div>
+</div>`;
+
+    const breakdownHtml = `
+  <div class="card speaking-result-card speaking-breakdown-card" style="animation-delay:.03s">
+  <div class="card-title">${t('score_breakdown')}</div>
+  ${this.metricRows([
+    { label: this.metricLabel('metric_content', 'Content'), value: result.content },
+    { label: this.metricLabel('metric_fluency', 'Fluency'), value: result.fluency },
+    { label: this.metricLabel('metric_pronunciation', 'Pronunciation'), value: result.pronunciation },
+  ])}
+</div>`;
+
+    const feedbackHtml = `
+<div class="card speaking-result-card" style="animation-delay:.07s">
+  <div class="card-title">${t('score_feedback_label')}</div>
+  <div class="speaking-feedback-summary">${Scorer.escapeHtml(feedbackSummary)}</div>
+  <div class="speaking-feedback-columns">
+    <div>
+      <div class="speaking-feedback-heading">${t('score_key_issues')}</div>
+      ${this.feedbackList(feedback?.issues, t('score_no_issues'))}
+    </div>
+    <div>
+      <div class="speaking-feedback-heading">${t('score_improvements')}</div>
+      ${this.feedbackList(feedback?.improvements, t('score_no_improve'))}
+    </div>
+  </div>
+  ${(feedback?.example_fix || context.referenceText)
+    ? `<div class="speaking-feedback-heading">${t('score_correct_example')}</div><div class="speaking-example-fix">${Scorer.escapeHtml(feedback?.example_fix || context.referenceText || '')}</div>`
+    : ''}
+</div>`;
+
+    const reviewHtml = diff && window.WordReview
+      ? WordReview.render(diff, {
+        referenceText: context.referenceText,
+        transcriptText: result.transcript || '',
+      })
+      : (result.transcript
+        ? `<div class="card speaking-result-card" style="animation-delay:.12s"><div class="card-title">${t('score_recognised')}</div><div class="transcript-box">${Scorer.escapeHtml(result.transcript)}</div></div>`
+        : '');
+
+    return heroHtml + breakdownHtml + feedbackHtml + this.renderSavedAttempt(result) + reviewHtml + this.renderSpeakingActions(context);
+  },
+
+  renderWritingResult(result, context = {}) {
+    return this.renderStructuredResult(result, {
+      title: t('score_overall'),
+      subtitle: context.promptType || 'Writing assessment',
+      metrics: [
+        { label: this.metricLabel('metric_content', 'Content'), value: result.content },
+        { label: this.metricLabel('metric_grammar', 'Grammar'), value: result.grammar },
+        { label: this.metricLabel('metric_vocabulary', 'Vocabulary'), value: result.vocabulary },
+        { label: this.metricLabel('metric_spelling', 'Spelling'), value: result.spelling },
+      ],
+    });
+  },
+
+  renderSummaryResult(result, context = {}) {
+    return this.renderStructuredResult(result, {
+      title: t('score_overall'),
+      subtitle: context.promptType || 'Summary assessment',
+      metrics: [
+        { label: this.metricLabel('metric_content', 'Content'), value: result.content },
+        { label: this.metricLabel('metric_grammar', 'Grammar'), value: result.grammar },
+        { label: this.metricLabel('metric_vocabulary', 'Vocabulary'), value: result.vocabulary },
+        { label: this.metricLabel('metric_spelling', 'Spelling'), value: result.spelling },
+      ],
+    });
+  },
+
+  renderDictationResult(result) {
+    return this.renderStructuredResult(result, {
+      title: t('score_overall'),
+      subtitle: t('wfd_title'),
+      metrics: [
+        { label: this.metricLabel('metric_spelling', 'Spelling'), value: result.spelling },
+        { label: this.metricLabel('metric_grammar', 'Grammar'), value: result.grammar },
+        { label: this.metricLabel('metric_vocabulary', 'Vocabulary'), value: result.vocabulary },
+      ],
+    });
   },
 };
+
+window.AIScorer = AIScorer;

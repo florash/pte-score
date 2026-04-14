@@ -5,12 +5,51 @@ Pages['describe-image'] = function() {
   let recorder = null;
   let finalText = '';
   let recordingUrl = '';
+  let recordingBlob = null;
+  let recordingDurationSeconds = 0;
+  let recordingStartedAt = 0;
+  let uploadedAudio = null;
+  let audioSource = '';
   let stopMode = 'score';
   let speechStartTimer = null;
   let speechDetected = false;
   let failedStartWindow = false;
   const speechStartLimitMs = 5000;
-  const questions = DB.describeImage;
+  const predictionQuestions = getQuestionSet(DB.describeImage, 'describeImage', item => ({
+    id: item.id,
+    title: item.content,
+    hint: item.answer || '',
+    imageSvg: getPredictionDescribeImageTemplate(item.templateType || 'bar_chart', item.content),
+    type: item.templateType || 'bar_chart',
+    difficulty: item.difficulty || 'medium',
+    isPrediction: true,
+  }));
+  const usingPredictionBank = getQuestionSource().source === 'prediction';
+  const baseTemplates = getDiTemplates();
+  const templateQuestions = baseTemplates.map(item => ({
+    id: item.id,
+    title: item.title,
+    hint: item.description || '',
+    image: item.image,
+    imageSvg: item.imageSvg || '',
+    type: item.type,
+    difficulty: item.difficulty || 'medium',
+    isPrediction: false,
+  }));
+  const sourceQuestions = usingPredictionBank ? predictionQuestions : templateQuestions;
+  const totalQuestions = sourceQuestions.length;
+  const questions = getTodayPlanQuestions('practice-describe-image', getAccessibleQuestions(sourceQuestions));
+  qIndex = getInitialQuestionIndex(questions);
+  const getQuestionRecordingKey = (question) => `describeImage:${question?.id || qIndex}`;
+
+  setPageCleanup(() => {
+    stopTimer();
+    clearSpeechStartTimer();
+    if (recorder && recorder.isRunning) recorder.stop();
+    recorder = null;
+    if (uploadedAudio) SpeakingAudio.revokePreview(uploadedAudio);
+    uploadedAudio = null;
+  });
 
   function stopTimer() {
     if (timerObj) timerObj.stop();
@@ -36,7 +75,36 @@ Pages['describe-image'] = function() {
     speechStartTimer = null;
   }
 
+  function getActiveAudio() {
+    if (audioSource === 'upload' && uploadedAudio) return { ...uploadedAudio, source: 'upload' };
+    if (recordingBlob && recordingUrl) {
+      return {
+        file: new File([recordingBlob], 'describe-image.webm', { type: recordingBlob.type || 'audio/webm' }),
+        previewUrl: recordingUrl,
+        durationSeconds: recordingDurationSeconds || 1,
+        mimeType: recordingBlob.type || 'audio/webm',
+        name: 'Recorded response.webm',
+        source: 'recording',
+      };
+    }
+    if (uploadedAudio) return { ...uploadedAudio, source: 'upload' };
+    return null;
+  }
+
+  function renderSubmissionPanel(message = t('panel_record_answer')) {
+    $('#score-area').innerHTML = SpeakingAudio.renderCapturePanel({
+      title: 'Speaking audio',
+      helperText: message,
+      session: { activeAudio: getActiveAudio() },
+      uploadAction: 'DI_handleUpload',
+      clearUploadAction: 'DI_clearUpload',
+      submitAction: 'DI_submitAudio',
+      supportsRecording: !!window.MediaRecorder,
+    });
+  }
+
   function armSpeechStartRule() {
+    if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) return;
     clearSpeechStartTimer();
     speechDetected = false;
     failedStartWindow = false;
@@ -51,63 +119,105 @@ Pages['describe-image'] = function() {
     phase = 'prep';
     finalText = '';
     recordingUrl = '';
+    recordingBlob = null;
+    recordingDurationSeconds = 0;
+    audioSource = uploadedAudio ? 'upload' : '';
     speechDetected = false;
     failedStartWindow = false;
     clearSpeechStartTimer();
     stopTimer();
-    $('#score-area').innerHTML = '';
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget">
-  <button class="record-btn idle" id="rec-btn" onclick="DI_startRecord()">🎤</button>
-  <div class="record-status" id="rec-status">${message || '⏳ Study the image — recording starts automatically in 25s'}</div>
+  <button class="record-btn idle" id="rec-btn" disabled aria-disabled="true">🎤</button>
+  <div class="record-status" id="rec-status">${message || t('di_prep_locked')}</div>
   <div class="recorder-actions">
-    <button class="btn btn-primary" onclick="DI_startRecord()">Start Now</button>
-    <button class="btn btn-secondary" onclick="DI_restart()">Done</button>
+    <button class="btn btn-primary" id="di-start-btn" disabled aria-disabled="true">${t('btn_start_recording')}</button>
+    <button class="btn btn-secondary" onclick="DI_restart()">${t('btn_done')}</button>
   </div>
 </div>`;
-    timerObj = new CountdownTimer($('#timer-el'), 25, null, () => DI_startRecord());
+    renderSubmissionPanel(t('panel_study_then_record'));
+    timerObj = new CountdownTimer($('#timer-el'), 25, null, () => DI_enableRecord());
     timerObj.start();
+  }
+
+  function enableRecord(message) {
+    phase = 'ready';
+    const recBtn = $('#rec-btn');
+    const startBtn = $('#di-start-btn');
+    const status = $('#rec-status');
+    if (recBtn) {
+      recBtn.disabled = false;
+      recBtn.removeAttribute('aria-disabled');
+      recBtn.setAttribute('onclick', 'DI_startRecord()');
+    }
+    if (startBtn) {
+      startBtn.disabled = false;
+      startBtn.removeAttribute('aria-disabled');
+      startBtn.setAttribute('onclick', 'DI_startRecord()');
+    }
+    if (status) status.textContent = message || t('di_prep_ready');
+    renderSubmissionPanel(t('panel_record_answer'));
   }
 
   function render() {
     const q = questions[qIndex];
+    syncSelectedQuestion(q);
     if (window.PracticeTracker) PracticeTracker.setCurrentQuestion({ questionId: q.id, questionType: 'describeImage', questionText: `${q.title} ${q.hint}` });
     $('#page-container').innerHTML = `
 <div class="page-header">
-  <h1>Describe Image <span class="badge badge-speaking">Speaking</span></h1>
-  <p>Look at the image and describe it in detail within 40 seconds.</p>
+  <div style="margin-bottom:10px">
+    <button class="btn btn-secondary" onclick="backToQuestionList('practice-describe-image')">${t('btn_back_to_list')}</button>
+  </div>
+  <h1>${t('di_title')} <span class="badge badge-speaking">${t('badge_speaking')}</span></h1>
+  <p>${t('di_subtitle')}</p>
 </div>
 <div class="card">
   <div class="question-nav">
-    <span class="q-number">Question ${qIndex+1} / ${questions.length}</span>
+    <span class="q-number">${t('question_label')} ${qIndex+1} ${t('question_of')} ${questions.length}</span>
     <div id="timer-el" class="timer"><span class="timer-dot"></span>00:40</div>
   </div>
-  <div class="q-instruction">📌 You have 25 seconds to study the image, then 40 seconds to describe it.</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">
+    <span class="badge" style="background:rgba(37,99,235,0.1);color:#1d4ed8">${usingPredictionBank ? t('prediction_high_badge') : t('di_template_bank')}</span>
+    <span class="badge" style="background:rgba(15,23,42,0.06);color:var(--text-light)">${t('di_type_badge')}: ${q.isPrediction ? q.type.replace(/_/g, ' ') : getDiTemplateTypeLabel(q.type)}</span>
+    <span class="badge" style="background:rgba(15,23,42,0.06);color:var(--text-light)">${t('di_difficulty_badge')}: ${q.difficulty || 'medium'}</span>
+  </div>
+  <div class="q-instruction">${t('di_instruction')}</div>
   <div style="text-align:center;margin-bottom:20px">
     <div style="font-weight:600;margin-bottom:10px;font-size:15px">${q.title}</div>
-    ${q.imageSvg}
+    ${q.image ? `<img src="${q.image}" alt="${q.title}" style="width:min(100%, 860px);border-radius:16px;border:1px solid var(--border);background:#fff;box-shadow:0 10px 24px rgba(15,23,42,0.06)">` : q.imageSvg}
     <div style="font-size:12px;color:var(--text-light);margin-top:8px">${q.hint}</div>
   </div>
+  <div id="saved-audio-area"></div>
   <div id="recorder-area"></div>
   <div id="score-area"></div>
   <hr class="section-divider">
   <div class="btn-group">
-    <button class="btn btn-secondary" onclick="DI_prev()" ${qIndex===0 ? 'disabled' : ''}>← Prev</button>
-    <button class="btn btn-primary" onclick="DI_next()" ${qIndex===questions.length-1 ? 'disabled' : ''}>Next →</button>
+    <button class="btn btn-secondary" onclick="DI_prev()" ${qIndex===0 ? 'disabled' : ''}>${t('btn_prev')}</button>
+    ${qIndex===questions.length-1 ? renderTodayPlanAction('practice-describe-image') || `<button class="btn btn-primary" onclick="DI_next()" disabled>${t('btn_next')}</button>` : `<button class="btn btn-primary" onclick="DI_next()">${t('btn_next')}</button>`}
   </div>
+  ${renderGuestPracticeUpsell(totalQuestions, questions.length)}
 </div>`;
+    $('#saved-audio-area').innerHTML = AIScorer.renderQuestionRecordingHistory(getQuestionRecordingKey(q));
     startPrep();
   }
 
   window.DI_startRecord = async function() {
+    if (phase === 'prep') {
+      showToast(t('di_prep_locked'));
+      return;
+    }
     if (phase === 'recording') return;
-    const startedManually = phase === 'prep';
+    const startedManually = phase === 'ready';
     const allowed = await MicAccess.ensureOrNotify();
     if (!allowed) return;
     stopTimer();
     if (startedManually) resetTimerDisplay();
     phase = 'recording';
     finalText = '';
+    recordingUrl = '';
+    recordingBlob = null;
+    recordingDurationSeconds = 0;
+    recordingStartedAt = Date.now();
     speechDetected = false;
     failedStartWindow = false;
     stopMode = 'score';
@@ -115,18 +225,18 @@ Pages['describe-image'] = function() {
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget recording" id="rec-widget">
   <button class="record-btn recording" id="rec-btn" onclick="DI_stopRecord()">⏹</button>
-  <div class="record-status recording">🔴 Describe the image now</div>
+  <div class="record-status recording">${t('status_describe_now')}</div>
   <div class="waveform">${Array(5).fill('<div class="waveform-bar"></div>').join('')}</div>
   <div class="recorder-actions">
-    <button class="btn btn-danger" onclick="DI_cancelRecord()">Cancel</button>
-    <button class="btn btn-secondary" onclick="DI_exitRecord()">Done</button>
+    <button class="btn btn-danger" onclick="DI_cancelRecord()">${t('btn_cancel')}</button>
+    <button class="btn btn-secondary" onclick="DI_exitRecord()">${t('btn_done')}</button>
   </div>
 </div>`;
     timerObj = new CountdownTimer($('#timer-el'), 40, null, DI_stopRecord);
     timerObj.start();
     recorder = new SpeechRecorder({
       captureAudio: true,
-      onCapture: ({ url }) => { recordingUrl = url; },
+      onCapture: ({ url, blob }) => { recordingUrl = url; recordingBlob = blob || null; },
       continuous: true,
       keepAlive: false,
       onResult: ({ final, interim }) => {
@@ -139,10 +249,12 @@ Pages['describe-image'] = function() {
       onEnd: ({ final, audioUrl }) => {
         finalText = final || finalText;
         recordingUrl = audioUrl || recordingUrl;
+        recordingDurationSeconds = Math.max(1, Math.round((Date.now() - recordingStartedAt) / 1000));
+        audioSource = recordingBlob ? 'recording' : audioSource;
         const mode = stopMode;
         recorder = null;
         if (mode === 'cancel' || mode === 'exit') {
-          startPrep(mode === 'cancel' ? 'Recording cancelled. Review the image and try again.' : 'Attempt exited. Ready for another try.');
+          startPrep(mode === 'cancel' ? t('toast_di_cancel') : t('toast_di_exit'));
           return;
         }
         DI_showResult();
@@ -184,35 +296,105 @@ Pages['describe-image'] = function() {
     startPrep();
   };
 
-  window.DI_showResult = function() {
+  window.DI_enableRecord = function() {
+    enableRecord();
+  };
+
+  window.DI_handleUpload = async function(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    try {
+      if (uploadedAudio) SpeakingAudio.revokePreview(uploadedAudio);
+      uploadedAudio = await SpeakingAudio.inspectFile(file);
+      audioSource = 'upload';
+      renderSubmissionPanel(t('panel_uploaded_ready'));
+    } catch (error) {
+      uploadedAudio = null;
+      showToast(error.message || t('toast_audio_error'));
+      renderSubmissionPanel(t('panel_upload_or_record'));
+    } finally {
+      if (event?.target) event.target.value = '';
+    }
+  };
+
+  window.DI_clearUpload = function() {
+    if (uploadedAudio) SpeakingAudio.revokePreview(uploadedAudio);
+    uploadedAudio = null;
+    audioSource = recordingBlob ? 'recording' : '';
+    renderSubmissionPanel(t('panel_upload_another'));
+  };
+
+  window.DI_submitAudio = async function() {
     const q = questions[qIndex];
-    const score = !failedStartWindow && finalText ? Scorer.describeImage(finalText, `${q.title} ${q.hint}`) : null;
+    const activeAudio = getActiveAudio();
+    if (!activeAudio) {
+      showToast(t('toast_no_audio'));
+      return;
+    }
+    if (!AppAuth.isLoggedIn()) {
+      AuthUI.open('login');
+      $('#score-area').innerHTML = AIScorer.renderAuthGate();
+      return;
+    }
+    const stopLoading = SpeakingAudio.mountStageLoader($('#score-area'));
+    try {
+      const result = await AIScorer.scoreAudio({
+        task: 'speaking',
+        promptType: 'describe_image',
+        file: activeAudio.file,
+        mimeType: activeAudio.mimeType,
+        questionText: `${q.title} ${q.hint}`,
+        referenceAnswer: `${q.title} ${q.hint}`,
+        durationSeconds: activeAudio.durationSeconds,
+      });
+      stopLoading();
+      Stats.record('describeImage', result.overall || 0, 90, { transcript: result.transcript || finalText || '', ai_feedback: typeof result.feedback === 'object' ? (result.feedback.summary || '') : (result.feedback || '') });
+      AIScorer.saveQuestionRecording(getQuestionRecordingKey(q), {
+        audioUrl: AIScorer.getPlayableAudioUrl(result, activeAudio.previewUrl || ''),
+        score: result.overall || null,
+        createdAt: new Date().toLocaleString(),
+      });
+      $('#saved-audio-area').innerHTML = AIScorer.renderQuestionRecordingHistory(getQuestionRecordingKey(q));
+      $('#score-area').innerHTML = AIScorer.renderSpeakingResult(result, {
+        promptType: 'Describe Image',
+        referenceText: `${q.title} ${q.hint}`,
+        reRecordAction: 'DI_startRecord()',
+        tryAgainAction: 'DI_restart()',
+        isLoggedIn: AppAuth.isLoggedIn(),
+      });
+    } catch (error) {
+      stopLoading();
+      $('#score-area').innerHTML = AIScorer.renderError(AIScorer.getErrorMessage(error));
+      if (error?.code === 'AUTH_REQUIRED') AuthUI.open('login');
+    }
+  };
+
+  window.DI_showResult = async function() {
     $('#recorder-area').innerHTML = `
 <div class="recorder-widget done result-state">
   <div class="recorder-result-main">
     <div class="recorder-result-icon">✓</div>
     <div class="recorder-result-copy">
-      <div class="recorder-result-title">${failedStartWindow ? 'Failed to start in time' : 'Recording complete'}</div>
-      <div class="recorder-result-sub">${failedStartWindow ? 'You must start speaking within 5 seconds to receive a score.' : 'Your description is ready for AI feedback below.'}</div>
+      <div class="recorder-result-title">${failedStartWindow ? t('result_failed_start') : t('result_recording_complete')}</div>
+      <div class="recorder-result-sub">${failedStartWindow ? t('result_failed_sub') : t('result_description_ready')}</div>
     </div>
   </div>
   <div class="result-actions compact">
-    <button class="btn btn-primary" onclick="DI_startRecord()">Re-record</button>
-    <button class="btn btn-secondary" onclick="DI_restart()">Done</button>
+    <button class="btn btn-primary" onclick="DI_startRecord()">${t('btn_re_record')}</button>
+    <button class="btn btn-secondary" onclick="DI_restart()">${t('btn_done')}</button>
   </div>
 </div>`;
-    if (failedStartWindow) Stats.record('describeImage', 10, 90, { transcript: finalText || '', ai_feedback: 'You must start speaking within 5 seconds after recording begins.' });
-    else if (score) Stats.record('describeImage', score.pte, 90, { transcript: finalText || '', ai_feedback: Scorer.getSpeakingInsights(score, finalText || '', `${q.title} ${q.hint}`).suggestion });
-    $('#score-area').innerHTML = failedStartWindow ? `<div style="background:#fff8ed;border:1px solid #f59e0b;border-radius:8px;padding:14px;font-size:13.5px;color:#92400e"><strong>Score: 10/90</strong><br>⚠️ You must start speaking within 5 seconds after recording begins, otherwise this item is marked as fail.</div>` : finalText ? `
-${Scorer.renderSpeakingResult({
-  questionTitle: q.title,
-  score,
-  transcript: finalText,
-  reference: `${q.title} ${q.hint}`,
-  audioUrl: recordingUrl,
-  retryAction: 'DI_startRecord()',
-  nextAction: 'DI_next()'
-})}` : `<div style="background:#fff8ed;border:1px solid #fcd34d;border-radius:8px;padding:14px;font-size:13.5px;color:#92400e">⚠️ No speech detected.</div>`;
+    if (failedStartWindow) {
+      Stats.record('describeImage', 10, 90, { transcript: finalText || '', ai_feedback: 'You must start speaking within 5 seconds after recording begins.' });
+      $('#score-area').innerHTML = `<div style="background:#fff8ed;border:1px solid #f59e0b;border-radius:8px;padding:14px;font-size:13.5px;color:#92400e"><strong>${t('score_10_label')}</strong><br>${t('score_fail_no_start')}</div>`;
+      return;
+    }
+    if (!recordingBlob && (!finalText || !finalText.trim())) {
+      $('#score-area').innerHTML = `<div style="background:#fff8ed;border:1px solid #fcd34d;border-radius:8px;padding:14px;font-size:13.5px;color:#92400e">${t('score_no_speech')}</div>`;
+      return;
+    }
+    audioSource = recordingBlob ? 'recording' : audioSource;
+    renderSubmissionPanel(t('panel_recording_ready'));
   };
 
   window.DI_prev = () => { qIndex = Math.max(0, qIndex - 1); stopTimer(); clearRecorder('exit'); render(); };

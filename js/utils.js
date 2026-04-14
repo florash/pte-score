@@ -384,13 +384,20 @@ class SpeechRecorder {
   }
   start() {
     const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){ this.onError&&this.onError('Browser does not support speech recognition. Please use Chrome.'); return; }
     clearTimeout(this.restartTimer);
     this.shouldStop=false;
     this.finalTranscript='';
-    this.recognitionEnded=false;
+    this.recognitionEnded=!SR;
     this.captureEnded=!this.captureAudio;
     this._startCapture();
+    if(!SR){
+      if (!this.captureAudio) {
+        this.onError&&this.onError('Browser does not support speech recognition. Please use Chrome.');
+        return;
+      }
+      this.isRunning=true;
+      return;
+    }
     this.recognition=this._buildRecognition();
     this.recognition.start();
     this.isRunning=true;

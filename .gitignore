@@ -1,0 +1,14 @@
+.env
+backend/.env
+.venv/
+backend/.venv/
+__pycache__/
+*.pyc
+
+# macOS / local editor files
+.DS_Store
+.claude/
+supabase/.DS_Store
+
+# Local service-account / secret files
+pte-practice-493007-80597ff45ee7.json

@@ -1,232 +1,282 @@
-Pages['walkman'] = function() {
-  // ── Build Playlist ────────────────────────────────────────────────────────
-  const PLAYLIST = [];
+function renderAudioTrainerPage() {
+  const state = {
+    index: 0,
+    isAutoplay: true,
+    rate: 1,
+    filter: 'all',
+    player: null,
+    playState: 'idle',
+  };
 
-  DB.writeDictation.forEach((q, i) => PLAYLIST.push({
-    id: q.id, icon: '✏️', type: 'Write Dictation', cat: 'listening',
-    title: `Dictation #${i+1}`, tag: q.tag || '', text: q.sentence,
-  }));
-  DB.readAloud.forEach((q, i) => PLAYLIST.push({
-    id: q.id, icon: '📖', type: 'Read Aloud', cat: 'speaking',
-    title: `Read Aloud #${i+1}`, tag: q.tag || '', text: q.text,
-  }));
-  DB.repeatSentence.forEach((q, i) => PLAYLIST.push({
-    id: q.id, icon: '🔁', type: 'Repeat Sentence', cat: 'speaking',
-    title: `Sentence #${i+1}`, tag: q.tag || '', text: q.text,
-  }));
+  function getTrainerItems() {
+    const repeatSentence = getQuestionSet(DB.repeatSentence, 'repeatSentence', item => ({
+      id: item.id,
+      text: item.content,
+      type: 'repeatSentence',
+    })).map(item => ({
+      id: item.id,
+      text: item.text,
+      type: 'repeatSentence',
+    }));
 
-  // ── State ─────────────────────────────────────────────────────────────────
-  let currentIdx = 0;
-  let isPlaying = false;
-  let isLooping = true;
-  let speed = 1.0;
-  let filterCat = 'all';
-  let progressTimer = null;
-  let progressStart = 0;
-  let estimatedDuration = 0;
+    const writeDictation = getQuestionSet(DB.writeDictation, 'writeFromDictation', item => ({
+      id: item.id,
+      sentence: item.content,
+      type: 'writeFromDictation',
+    })).map(item => ({
+      id: item.id,
+      text: item.sentence,
+      type: 'writeFromDictation',
+    }));
 
-  function filtered() {
-    return filterCat === 'all' ? PLAYLIST : PLAYLIST.filter(q => q.cat === filterCat);
+    const allItems = [...repeatSentence, ...writeDictation];
+    if (state.filter === 'repeatSentence') return allItems.filter(item => item.type === 'repeatSentence');
+    if (state.filter === 'writeFromDictation') return allItems.filter(item => item.type === 'writeFromDictation');
+    return allItems;
   }
 
-  function currentItem() { return filtered()[currentIdx]; }
-
-  function estDuration(text, spd) {
-    return Math.max(2, Math.round(text.length / (14 * spd)));
+  function getPlaylist() {
+    const items = getTrainerItems();
+    if (!items.length) return [];
+    if (state.index > items.length - 1) state.index = items.length - 1;
+    if (state.index < 0) state.index = 0;
+    return items;
   }
 
-  // ── TTS ───────────────────────────────────────────────────────────────────
-  function speak() {
-    const item = currentItem();
+  function getCurrentItem() {
+    const playlist = getPlaylist();
+    return playlist[state.index] || null;
+  }
+
+  function getTypeLabel(type) {
+    return type === 'writeFromDictation' ? t('wfd_title') : t('rs_title');
+  }
+
+  function stopPlayer() {
+    if (!state.player) return;
+    state.player.stop();
+    state.player = null;
+    state.playState = 'idle';
+  }
+
+  function updatePlaybackButton() {
+    const btn = document.getElementById('audio-trainer-play');
+    if (!btn) return;
+    btn.textContent = state.playState === 'playing' ? '⏸' : '▶';
+  }
+
+  function updateProgressFill(pct = 0) {
+    const fill = document.getElementById('audio-trainer-progress-fill');
+    if (!fill) return;
+    fill.style.width = `${Math.max(0, Math.min(100, pct * 100))}%`;
+  }
+
+  function updateNowPlaying() {
+    const item = getCurrentItem();
+    const playlist = getPlaylist();
+    const typeEl = document.getElementById('audio-trainer-type');
+    const progressEl = document.getElementById('audio-trainer-count');
+    const textEl = document.getElementById('audio-trainer-text');
+    const emptyEl = document.getElementById('audio-trainer-empty');
+    const shellEl = document.getElementById('audio-trainer-shell');
+    const autoToggle = document.getElementById('audio-trainer-autoplay');
+
+    if (autoToggle) autoToggle.checked = state.isAutoplay;
+
+    if (!item) {
+      if (shellEl) shellEl.style.display = 'none';
+      if (emptyEl) emptyEl.style.display = 'block';
+      return;
+    }
+
+    if (shellEl) shellEl.style.display = 'grid';
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (typeEl) typeEl.textContent = getTypeLabel(item.type);
+    if (progressEl) progressEl.textContent = `${state.index + 1}/${playlist.length}`;
+    if (textEl) textEl.textContent = item.text;
+    updatePlaybackButton();
+    updateProgressFill(0);
+
+    document.querySelectorAll('[data-audio-filter]').forEach(button => {
+      button.classList.toggle('active', button.dataset.audioFilter === state.filter);
+    });
+
+    document.querySelectorAll('[data-audio-rate]').forEach(button => {
+      button.classList.toggle('active', Number(button.dataset.audioRate) === state.rate);
+    });
+  }
+
+  function playCurrent({ restart = true } = {}) {
+    const item = getCurrentItem();
     if (!item) return;
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(item.text);
-    utt.rate = speed;
-    utt.lang = 'en-AU';
-    estimatedDuration = estDuration(item.text, speed);
-    progressStart = Date.now();
-    startProgressTimer();
-    utt.onend = () => {
-      stopProgressTimer();
-      setProgress(100);
-      if (!isPlaying) return;
-      setTimeout(() => {
-        const list = filtered();
-        if (currentIdx < list.length - 1) {
-          currentIdx++;
-        } else if (isLooping) {
-          currentIdx = 0;
-        } else {
-          isPlaying = false;
-          renderControls();
-          return;
+
+    if (restart) stopPlayer();
+    if (state.player && !restart) {
+      state.player.toggle();
+      return;
+    }
+
+    state.player = createSpeechPlayer({
+      text: item.text,
+      opts: { rate: state.rate },
+      onProgress: pct => updateProgressFill(pct),
+      onEnd: () => {
+        state.player = null;
+        state.playState = 'idle';
+        updatePlaybackButton();
+        updateProgressFill(1);
+        if (state.isAutoplay) {
+          const playlist = getPlaylist();
+          if (state.index < playlist.length - 1) {
+            state.index += 1;
+            updateNowPlaying();
+            playCurrent({ restart: true });
+          }
         }
-        renderPlayer();
-        speak();
-      }, 600);
+      },
+      onStateChange: nextState => {
+        state.playState = nextState === 'ended' ? 'idle' : nextState;
+        updatePlaybackButton();
+      },
+    });
+
+    state.player.play();
+  }
+
+  function goToIndex(nextIndex, shouldAutoplay = false) {
+    stopPlayer();
+    state.index = nextIndex;
+    updateNowPlaying();
+    if (shouldAutoplay) playCurrent({ restart: true });
+  }
+
+  function bindControls() {
+    window.AudioTrainer_togglePlay = function() {
+      if (!state.player) {
+        playCurrent({ restart: true });
+        return;
+      }
+      state.player.toggle();
     };
-    utt.onerror = () => { isPlaying = false; renderControls(); };
-    window.speechSynthesis.speak(utt);
+
+    window.AudioTrainer_next = function() {
+      const playlist = getPlaylist();
+      if (!playlist.length) return;
+      const nextIndex = Math.min(state.index + 1, playlist.length - 1);
+      goToIndex(nextIndex, state.playState === 'playing');
+    };
+
+    window.AudioTrainer_prev = function() {
+      const playlist = getPlaylist();
+      if (!playlist.length) return;
+      const nextIndex = Math.max(state.index - 1, 0);
+      goToIndex(nextIndex, state.playState === 'playing');
+    };
+
+    window.AudioTrainer_toggleAutoplay = function(checked) {
+      state.isAutoplay = !!checked;
+    };
+
+    window.AudioTrainer_setFilter = function(filter) {
+      state.filter = filter || 'all';
+      state.index = 0;
+      stopPlayer();
+      updateNowPlaying();
+    };
+
+    window.AudioTrainer_setRate = function(rate) {
+      state.rate = Number(rate) || 1;
+      const shouldResume = state.playState === 'playing';
+      stopPlayer();
+      updateNowPlaying();
+      if (shouldResume) playCurrent({ restart: true });
+    };
   }
-
-  function pause() { window.speechSynthesis.pause(); stopProgressTimer(); }
-  function resume() { window.speechSynthesis.resume(); startProgressTimer(); }
-
-  function startProgressTimer() {
-    stopProgressTimer();
-    progressTimer = setInterval(() => {
-      const elapsed = (Date.now() - progressStart) / 1000;
-      const pct = Math.min(99, (elapsed / estimatedDuration) * 100);
-      setProgress(pct);
-    }, 200);
-  }
-  function stopProgressTimer() { clearInterval(progressTimer); progressTimer = null; }
-  function setProgress(pct) {
-    const bar = document.getElementById('wm-progress-fill');
-    const time = document.getElementById('wm-time');
-    if (bar) bar.style.width = pct + '%';
-    if (time) {
-      const elapsed = Math.min(estimatedDuration, Math.round((pct / 100) * estimatedDuration));
-      time.textContent = fmtTime(elapsed) + ' / ' + fmtTime(estimatedDuration);
-    }
-  }
-  function fmtTime(s) { return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); }
-
-  // ── Render ────────────────────────────────────────────────────────────────
-  function renderPlayer() {
-    const item = currentItem();
-    const np = document.getElementById('wm-now-playing');
-    if (!np || !item) return;
-    np.innerHTML = `
-      <div class="wm-track-icon">${item.icon}</div>
-      <div class="wm-track-info">
-        <div class="wm-track-title">${item.title}</div>
-        <div class="wm-track-meta">${item.type}${item.tag ? ' · ' + item.tag : ''}</div>
-      </div>`;
-    const txt = document.getElementById('wm-text-preview');
-    if (txt) txt.textContent = item.text;
-    renderControls();
-    renderList();
-    setProgress(0);
-    progressStart = Date.now();
-    estimatedDuration = estDuration(item.text, speed);
-    setProgress(0);
-  }
-
-  function renderControls() {
-    const playBtn = document.getElementById('wm-play-btn');
-    const loopBtn = document.getElementById('wm-loop-btn');
-    if (playBtn) playBtn.textContent = isPlaying ? '⏸' : '▶';
-    if (loopBtn) { loopBtn.textContent = '🔁'; loopBtn.style.opacity = isLooping ? '1' : '0.35'; }
-    const speeds = document.querySelectorAll('.wm-speed-btn');
-    speeds.forEach(b => b.classList.toggle('active', parseFloat(b.dataset.speed) === speed));
-  }
-
-  function renderList() {
-    const list = filtered();
-    const container = document.getElementById('wm-list');
-    if (!container) return;
-    container.innerHTML = list.map((item, i) => `
-      <div class="wm-list-item ${i === currentIdx ? 'active' : ''}" onclick="WM_goto(${i})">
-        <span class="wm-li-icon">${item.icon}</span>
-        <div class="wm-li-info">
-          <div class="wm-li-title">${item.title}</div>
-          <div class="wm-li-meta">${item.type}${item.tag ? ' · ' + item.tag : ''}</div>
-        </div>
-        <span class="wm-li-dur">${fmtTime(estDuration(item.text, speed))}</span>
-      </div>`).join('');
-  }
-
-  // ── Controls ──────────────────────────────────────────────────────────────
-  window.WM_play = function() {
-    if (isPlaying) {
-      isPlaying = false;
-      pause();
-    } else {
-      isPlaying = true;
-      if (window.speechSynthesis.paused) resume();
-      else speak();
-    }
-    renderControls();
-  };
-  window.WM_prev = function() {
-    stopProgressTimer(); window.speechSynthesis.cancel();
-    currentIdx = Math.max(0, currentIdx - 1);
-    renderPlayer();
-    if (isPlaying) speak();
-  };
-  window.WM_next = function() {
-    stopProgressTimer(); window.speechSynthesis.cancel();
-    const list = filtered();
-    currentIdx = isLooping ? (currentIdx + 1) % list.length : Math.min(list.length - 1, currentIdx + 1);
-    renderPlayer();
-    if (isPlaying) speak();
-  };
-  window.WM_loop = function() {
-    isLooping = !isLooping;
-    renderControls();
-  };
-  window.WM_setSpeed = function(s) {
-    speed = parseFloat(s);
-    renderControls();
-    if (isPlaying) { window.speechSynthesis.cancel(); speak(); }
-  };
-  window.WM_goto = function(i) {
-    stopProgressTimer(); window.speechSynthesis.cancel();
-    currentIdx = i;
-    renderPlayer();
-    isPlaying = true;
-    speak();
-    renderControls();
-  };
-  window.WM_filter = function(cat) {
-    filterCat = cat;
-    currentIdx = 0;
-    document.querySelectorAll('.wm-filter-btn').forEach(b =>
-      b.classList.toggle('active', b.dataset.cat === cat));
-    window.speechSynthesis.cancel();
-    isPlaying = false;
-    renderPlayer();
-    renderControls();
-  };
-
-  // ── Initial Render ────────────────────────────────────────────────────────
-  const item0 = filtered()[0] || PLAYLIST[0];
-  estimatedDuration = item0 ? estDuration(item0.text, speed) : 0;
 
   $('#page-container').innerHTML = `
-<div class="page-header">
-  <h1>随身听 <span class="badge badge-listening">Walkman</span></h1>
-</div>
-<div class="wm-player card">
-  <div id="wm-now-playing" class="wm-now-playing"></div>
-  <div class="wm-text-box">
-    <div id="wm-text-preview" class="wm-text-preview"></div>
+<div class="practice-page">
+  <div class="page-header">
+    <h1>${t('audioTrainer')}</h1>
+    <p>${t('audio_trainer_subtitle')}</p>
   </div>
-  <div class="wm-progress-row">
-    <div class="wm-progress-track" id="wm-progress-track">
-      <div class="wm-progress-fill" id="wm-progress-fill"></div>
-    </div>
-    <span class="wm-time" id="wm-time">0:00 / 0:00</span>
-  </div>
-  <div class="wm-controls">
-    <div class="wm-speed-btns">
-      ${[0.75,1.0,1.25,1.5].map(s=>`<button class="wm-speed-btn ${s===1.0?'active':''}" data-speed="${s}" onclick="WM_setSpeed(${s})">${s}x</button>`).join('')}
-    </div>
-    <div class="wm-main-controls">
-      <button class="wm-ctrl-btn" onclick="WM_prev()">⏮</button>
-      <button class="wm-play-btn" id="wm-play-btn" onclick="WM_play()">▶</button>
-      <button class="wm-ctrl-btn" onclick="WM_next()">⏭</button>
-    </div>
-    <button class="wm-loop-btn" id="wm-loop-btn" onclick="WM_loop()" title="循环">🔁</button>
-  </div>
-</div>
-<div class="wm-filter-row">
-  <button class="wm-filter-btn active" data-cat="all" onclick="WM_filter('all')">全部</button>
-  <button class="wm-filter-btn" data-cat="listening" onclick="WM_filter('listening')">听力</button>
-  <button class="wm-filter-btn" data-cat="speaking" onclick="WM_filter('speaking')">口语</button>
-</div>
-<div id="wm-list" class="wm-list"></div>`;
 
-  renderPlayer();
-};
+  <div class="card" id="audio-trainer-empty" style="display:none">
+    <div class="card-title">${t('audioTrainer')}</div>
+    <p style="font-size:14px;color:var(--text-light);line-height:1.7">${t('audio_trainer_empty')}</p>
+  </div>
+
+  <div id="audio-trainer-shell" class="audio-trainer-shell">
+    <div class="card audio-trainer-main-card" style="padding:26px 28px">
+      <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px">
+        <div>
+          <div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-light)">${t('audio_trainer_current_type')}</div>
+          <div id="audio-trainer-type" style="margin-top:8px;font-size:24px;font-weight:700;color:var(--text)"></div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-light)">${t('audio_trainer_progress')}</div>
+          <div id="audio-trainer-count" style="margin-top:8px;font-size:24px;font-weight:700;color:var(--text)"></div>
+        </div>
+      </div>
+
+      <div class="audio-trainer-text-wrap" style="padding:28px;border:1px solid var(--border);border-radius:22px;background:var(--surface);min-height:240px;display:flex;align-items:center;justify-content:center;text-align:center">
+        <div id="audio-trainer-text" class="audio-trainer-text" style="font-size:28px;line-height:1.6;font-weight:600;letter-spacing:-0.02em;color:var(--text);max-width:780px"></div>
+      </div>
+
+      <div style="margin-top:18px;height:8px;background:rgba(148,163,184,0.16);border-radius:999px;overflow:hidden">
+        <div id="audio-trainer-progress-fill" style="width:0%;height:100%;background:var(--text);border-radius:999px"></div>
+      </div>
+
+      <div style="display:flex;justify-content:center;gap:12px;align-items:center;flex-wrap:wrap;margin-top:22px">
+        <button class="btn btn-outline" type="button" onclick="AudioTrainer_prev()">⏮</button>
+        <button class="btn btn-primary" id="audio-trainer-play" type="button" onclick="AudioTrainer_togglePlay()">▶</button>
+        <button class="btn btn-outline" type="button" onclick="AudioTrainer_next()">⏭</button>
+      </div>
+    </div>
+
+    <div class="audio-trainer-side" style="display:grid;gap:20px">
+      <div class="card" style="padding:22px 24px">
+        <div class="card-title">${t('audio_trainer_autoplay')}</div>
+        <label style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:14px;color:var(--text)">
+          <span>${t('audio_trainer_autoplay')}</span>
+          <input id="audio-trainer-autoplay" type="checkbox" checked onchange="AudioTrainer_toggleAutoplay(this.checked)">
+        </label>
+      </div>
+
+      <div class="card" style="padding:22px 24px">
+        <div class="card-title">${t('audio_trainer_filter')}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn btn-outline audio-trainer-chip active" type="button" data-audio-filter="all" onclick="AudioTrainer_setFilter('all')">${t('question_filter_all')}</button>
+          <button class="btn btn-outline audio-trainer-chip" type="button" data-audio-filter="repeatSentence" onclick="AudioTrainer_setFilter('repeatSentence')">${t('audio_trainer_rs')}</button>
+          <button class="btn btn-outline audio-trainer-chip" type="button" data-audio-filter="writeFromDictation" onclick="AudioTrainer_setFilter('writeFromDictation')">${t('audio_trainer_wfd')}</button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:22px 24px">
+        <div class="card-title">${t('audio_trainer_speed')}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn btn-outline audio-trainer-chip" type="button" data-audio-rate="0.8" onclick="AudioTrainer_setRate(0.8)">0.8x</button>
+          <button class="btn btn-outline audio-trainer-chip active" type="button" data-audio-rate="1" onclick="AudioTrainer_setRate(1)">1x</button>
+          <button class="btn btn-outline audio-trainer-chip" type="button" data-audio-rate="1.2" onclick="AudioTrainer_setRate(1.2)">1.2x</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+  bindControls();
+  updateNowPlaying();
+
+  setPageCleanup(() => {
+    stopPlayer();
+    delete window.AudioTrainer_togglePlay;
+    delete window.AudioTrainer_next;
+    delete window.AudioTrainer_prev;
+    delete window.AudioTrainer_toggleAutoplay;
+    delete window.AudioTrainer_setFilter;
+    delete window.AudioTrainer_setRate;
+  });
+}
+
+Pages['audio-trainer'] = renderAudioTrainerPage;
+Pages['tools-audio-trainer'] = renderAudioTrainerPage;
+Pages['smart-practice-audio-trainer'] = renderAudioTrainerPage;

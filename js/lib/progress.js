@@ -1,5 +1,12 @@
 const PracticeTracker = {
   currentQuestion: null,
+  speakingTypeMap: {
+    read_aloud: { questionType: 'readAloud', label: 'Read Aloud' },
+    repeat_sentence: { questionType: 'repeatSentence', label: 'Repeat Sentence' },
+    describe_image: { questionType: 'describeImage', label: 'Describe Image' },
+    retell_lecture: { questionType: 'retellLecture', label: 'Re-tell Lecture' },
+    answer_short_question: { questionType: 'answerShort', label: 'Answer Short Question' },
+  },
 
   setCurrentQuestion(meta) {
     this.currentQuestion = {
@@ -42,13 +49,72 @@ const PracticeTracker = {
     if (!AppAuth.isLoggedIn()) return [];
     const client = SupabaseService.getClient();
     if (!client) return [];
+    let practiceAttempts = [];
+    let speakingAttempts = [];
+
+    try {
+      const { data, error } = await client
+        .from('practice_attempts')
+        .select('id, question_id, question_type, question_text, score, completed_at, duration_seconds, transcript, ai_feedback')
+        .order('completed_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      practiceAttempts = data || [];
+    } catch (error) {
+      console.error('[PracticeTracker] Failed to fetch practice_attempts.', error);
+    }
+
+    try {
+      speakingAttempts = await this.fetchSpeakingAttempts(limit);
+    } catch (error) {
+      console.error('[PracticeTracker] Failed to fetch speaking_attempts.', error);
+    }
+
+    return [...practiceAttempts, ...speakingAttempts]
+      .sort((a, b) => new Date(b.completed_at || b.created_at || 0) - new Date(a.completed_at || a.created_at || 0))
+      .slice(0, limit);
+  },
+
+  async fetchSpeakingAttempts(limit = 200) {
+    if (!AppAuth.isLoggedIn()) return [];
+    const client = SupabaseService.getClient();
+    if (!client) return [];
+
     const { data, error } = await client
-      .from('practice_attempts')
-      .select('id, question_id, question_type, question_text, score, completed_at, duration_seconds, transcript, ai_feedback')
-      .order('completed_at', { ascending: false })
+      .from('speaking_attempts')
+      .select('id, prompt_type, question_text, reference_text, transcript, audio_path, overall_score, content_score, fluency_score, pronunciation_score, feedback_summary, feedback_json, duration_seconds, transcript_word_count, issue_summary, created_at')
+      .order('created_at', { ascending: false })
       .limit(limit);
     if (error) throw error;
-    return data || [];
+
+    return (data || []).map(item => this.normalizeSpeakingAttempt(item));
+  },
+
+  normalizeSpeakingAttempt(item) {
+    const promptType = String(item?.prompt_type || '').trim().toLowerCase();
+    const mapped = this.speakingTypeMap[promptType] || {
+      questionType: promptType || 'speaking',
+      label: promptType ? promptType.replace(/_/g, ' ') : 'Speaking',
+    };
+
+    return {
+      id: item.id,
+      question_id: item.id,
+      question_type: mapped.questionType,
+      question_text: item.question_text || item.reference_text || null,
+      score: typeof item.overall_score === 'number' ? item.overall_score : Number(item.overall_score),
+      completed_at: item.created_at,
+      duration_seconds: item.duration_seconds,
+      transcript: item.transcript || null,
+      ai_feedback: item.feedback_summary || item.feedback_json?.summary || null,
+      prompt_type: promptType,
+      content_score: item.content_score,
+      fluency_score: item.fluency_score,
+      pronunciation_score: item.pronunciation_score,
+      transcript_word_count: item.transcript_word_count,
+      issue_summary: item.issue_summary || null,
+      source_table: 'speaking_attempts',
+    };
   },
 
   async fetchRecentAttempts(limit = 8) {
