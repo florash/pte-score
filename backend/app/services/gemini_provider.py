@@ -50,6 +50,11 @@ class GeminiProvider(AIProvider):
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail="Configured Gemini model is unavailable. Please update the model name.",
                     ) from exc
+                if exc.response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="The AI model is currently busy. Please wait a moment and try again.",
+                    ) from exc
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Gemini scoring request failed.",
