@@ -20,7 +20,7 @@ from app.services.stt_provider import STTProvider
 router = APIRouter(tags=["audio-scoring"])
 logger = logging.getLogger(__name__)
 
-ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".m4a"}
+ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".aac"}
 ALLOWED_AUDIO_MIME_TYPES = {
     "audio/webm",
     "audio/webm;codecs=opus",
@@ -29,17 +29,23 @@ ALLOWED_AUDIO_MIME_TYPES = {
     "audio/mpeg",
     "audio/mp3",
     "audio/mp4",
+    "audio/mp4;codecs=mp4a.40.2",
     "audio/m4a",
     "audio/x-m4a",
+    "audio/aac",
+    "audio/aacp",
+    "audio/x-aac",
+    "audio/3gpp",
+    "audio/3gpp2",
 }
 
 
 def validate_audio_upload(file: UploadFile, config: Settings) -> None:
     suffix = Path(file.filename or "").suffix.lower()
     mime_type = (file.content_type or "").lower()
-    if suffix not in ALLOWED_AUDIO_EXTENSIONS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a webm, wav, mp3, or m4a file.")
-    if mime_type and mime_type not in ALLOWED_AUDIO_MIME_TYPES:
+    if suffix and suffix not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a supported audio file such as webm, wav, mp3, m4a, mp4, or aac.")
+    if mime_type and mime_type not in ALLOWED_AUDIO_MIME_TYPES and not mime_type.startswith("audio/mp4;"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That audio format is not supported yet.")
 
 

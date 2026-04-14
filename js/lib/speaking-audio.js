@@ -1,5 +1,5 @@
 const SpeakingAudio = {
-  acceptedTypes: '.webm,.wav,.mp3,.m4a,audio/webm,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a',
+  acceptedTypes: '.webm,.wav,.mp3,.m4a,.mp4,.aac,audio/webm,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac,audio/x-aac,audio/3gpp,audio/3gpp2',
   maxBytes: 10 * 1024 * 1024,
   minDurationSeconds: 1,
   maxDurationSeconds: 60,
@@ -18,12 +18,14 @@ const SpeakingAudio = {
 
   isSupportedFile(file) {
     const ext = this.getExtension(file?.name || '');
-    return ['.webm', '.wav', '.mp3', '.m4a'].includes(ext);
+    return ['.webm', '.wav', '.mp3', '.m4a', '.mp4', '.aac'].includes(ext);
   },
 
   async inspectFile(file) {
     if (!file) throw new Error('Please choose an audio file before submitting.');
-    if (!this.isSupportedFile(file)) throw new Error('Please upload a webm, wav, mp3, or m4a file.');
+    if (!this.isSupportedFile(file) && !(file?.type || '').startsWith('audio/')) {
+      throw new Error('Please upload a supported audio file such as webm, wav, mp3, m4a, mp4, or aac.');
+    }
     if (file.size > this.maxBytes) throw new Error('Please keep audio files under 10 MB.');
 
     const previewUrl = URL.createObjectURL(file);
