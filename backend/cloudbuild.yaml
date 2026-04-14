@@ -5,9 +5,11 @@ steps:
   - name: gcr.io/cloud-builders/docker
     args:
       - build
+      - -f
+      - backend/Dockerfile
       - -t
       - gcr.io/$PROJECT_ID/pte-backend:$COMMIT_SHA
-      - .
+      - backend
 
   - name: gcr.io/cloud-builders/docker
     args:
