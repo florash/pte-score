@@ -4,7 +4,10 @@ const AIScorer = {
   getBaseUrl() {
     const env = window.__PTE_ENV__ || {};
     const appConfig = window.APP_CONFIG || {};
-    return (appConfig.API_BASE_URL || env.PTE_API_BASE_URL || window.PTE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
+    const hostname = window.location.hostname || '';
+    const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1';
+    const fallbackApiBaseUrl = isLocalHost ? 'http://localhost:8000' : '';
+    return (appConfig.API_BASE_URL || env.PTE_API_BASE_URL || window.PTE_API_BASE_URL || fallbackApiBaseUrl).replace(/\/$/, '');
   },
 
   getNetworkDebugMessage(error, endpoint = '') {
